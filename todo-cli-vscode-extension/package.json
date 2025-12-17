@@ -1,0 +1,112 @@
+{
+  "name": "todo-cli-status",
+  "displayName": "Todo CLI Status",
+  "description": "Display todo-cli statistics in the VSCode status bar",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "todo-cli.refresh",
+        "title": "Todo CLI: Refresh Todo Status",
+        "category": "Todo CLI",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "todo-cli.openList",
+        "title": "Todo CLI: Open Todo List",
+        "category": "Todo CLI",
+        "icon": "$(list-unordered)"
+      },
+      {
+        "command": "todo-cli.configure",
+        "title": "Todo CLI: Configure Database Path",
+        "category": "Todo CLI",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "todo-cli.showCurrentPath",
+        "title": "Todo CLI: Show Current Database Path",
+        "category": "Todo CLI",
+        "icon": "$(file)"
+      },
+      {
+        "command": "todo-cli.openSettings",
+        "title": "Todo CLI: Open Settings",
+        "category": "Todo CLI",
+        "icon": "$(settings)"
+      }
+    ],
+    "menus": {
+      "statusBar/item/context": [
+        {
+          "command": "todo-cli.refresh",
+          "when": "statusBarItem == 'todo-cli.statusBar'",
+          "group": "1_todo@1"
+        },
+        {
+          "command": "todo-cli.openList",
+          "when": "statusBarItem == 'todo-cli.statusBar'",
+          "group": "1_todo@2"
+        },
+        {
+          "command": "todo-cli.showCurrentPath",
+          "when": "statusBarItem == 'todo-cli.statusBar'",
+          "group": "2_todo@1"
+        },
+        {
+          "command": "todo-cli.configure",
+          "when": "statusBarItem == 'todo-cli.statusBar'",
+          "group": "2_todo@2"
+        },
+        {
+          "command": "todo-cli.openSettings",
+          "when": "statusBarItem == 'todo-cli.statusBar'",
+          "group": "3_todo@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Todo CLI",
+      "properties": {
+        "todo-cli.dbPath": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "Path to todo database JSON file. Leave empty to use default, TODO_DB env var, or config file. Supports ~ for home directory.",
+          "markdownDescription": "Path to todo database JSON file.\n\n- **Workspace setting**: Set per-project database path\n- **Global setting**: Set default for all workspaces\n- Leave empty to use default resolution (workspace → global → TODO_DB env → config file → default path)\n- Supports `~` for home directory (e.g., `~/Documents/todos.json`)\n- Can be absolute or relative path\n\n**Resolution order:**\n1. Workspace setting\n2. Global setting\n3. TODO_DB environment variable\n4. Config file (~/.config/todo-cli/config.json)\n5. Default path (~/Documents/todo-cli/todos.json)"
+        },
+        "todo-cli.refreshInterval": {
+          "type": "number",
+          "default": 5000,
+          "description": "Refresh interval in milliseconds (default: 5000)"
+        },
+        "todo-cli.showPendingOnly": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show only pending tasks count in status bar"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^18.x",
+    "@types/vscode": "^1.74.0",
+    "typescript": "^5.0.0"
+  }
+}
+

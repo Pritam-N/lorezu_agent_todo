@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling>=1.22.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "todo-cli"
+version = "0.3.0"
+description = "A tiny local TODO CLI with arrow-key interactive selection, rich table view, and init/config housekeeping."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [{name="Your Name"}]
+dependencies = [
+  "prompt_toolkit>=3.0.36",
+  "rich>=13.0.0",
+]
+
+[project.scripts]
+todo = "todo_cli.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/todo_cli"]
