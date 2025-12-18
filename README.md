@@ -12,7 +12,7 @@ A powerful, local TODO management system with both a command-line interface and 
 
 ## 📦 Components
 
-### 1. Todo CLI (`todo-cli-v2/`)
+### 1. Todo CLI (`todo-cli/`)
 
 A Python-based command-line tool for managing todos from any terminal.
 
@@ -57,7 +57,7 @@ A TypeScript extension for VSCode/Cursor that displays todo statistics in the st
 ### Todo CLI Installation
 
 ```bash
-cd todo-cli-v2
+cd todo-cli
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -e .
@@ -218,13 +218,12 @@ Add to VSCode `settings.json`:
 
 ```
 lorezu_agent_todo/
-├── todo-cli-v2/                    # Python CLI application
-│   ├── src/todo_cli/
-│   │   ├── cli.py                  # Command-line interface
-│   │   ├── render.py               # Beautiful table rendering
-│   │   ├── storage.py              # Database operations
-│   │   ├── model.py                # Task data model
-│   │   └── ...
+├── todo-cli/                    # Python CLI application
+│   │── cli.py                  # Command-line interface
+│   │── render.py               # Beautiful table rendering
+│   │── storage.py              # Database operations
+│   │── model.py                # Task data model
+│   └── ...
 │   └── pyproject.toml
 │
 ├── todo-cli-vscode-extension/      # VSCode/Cursor extension
@@ -233,7 +232,7 @@ lorezu_agent_todo/
 │   ├── package.json
 │   └── todo-cli-status-0.1.1.vsix # Packaged extension
 │
-└── README.md                        # This file
+└── README.md
 ```
 
 ---
@@ -243,7 +242,7 @@ lorezu_agent_todo/
 ### CLI Development
 
 ```bash
-cd todo-cli-v2
+cd todo-cli
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .
@@ -331,7 +330,9 @@ Tasks are stored in JSON format:
 
 - **CLI Help**: `todo --help` or `todo COMMAND --help`
 - **Extension Setup**: See `todo-cli-vscode-extension/WORKSPACE_SETUP.md`
-- **Troubleshooting**: See `todo-cli-vscode-extension/FIND_COMMAND.md`
+- **Troubleshooting (extension commands)**: See `todo-cli-vscode-extension/FIND_COMMAND.md`
+- **Troubleshooting (CLI + extension)**: See `todo-cli/TROUBLESHOOTING.md`
+- **DB path resolution**: See `PATH_RESOLUTION.md`
 
 ---
 
@@ -349,7 +350,7 @@ MIT License - See LICENSE files in respective directories.
 
 ## 🎉 Quick Links
 
-- **CLI**: `todo-cli-v2/`
+- **CLI**: `todo-cli/`
 - **Extension**: `todo-cli-vscode-extension/`
 - **Install Extension**: Use the `.vsix` file in the extension directory
 - **CLI Commands**: Run `todo --help` after installation

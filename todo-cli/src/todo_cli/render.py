@@ -11,6 +11,24 @@ from datetime import datetime, date, timedelta
 from .model import Task
 
 
+def calculate_statistics(tasks: Iterable[Task]) -> dict:
+    """Public wrapper to compute task statistics for commands like `todo stats`."""
+    return _calculate_statistics(list(tasks))
+
+
+def render_statistics_dashboard(stats: dict, title: str = "Stats") -> None:
+    """Render a production-style stats dashboard (panels)."""
+    console = Console()
+    console.print(
+        Panel.fit(
+            f"[bold bright_magenta]📊 {title}[/bold bright_magenta]",
+            border_style="bright_blue",
+        )
+    )
+    console.print()
+    _render_statistics(stats, console)
+
+
 def _format_status(done: bool) -> Text:
     """Format status with modern indicators"""
     if done:
@@ -22,16 +40,16 @@ def _format_priority(priority: str) -> Text:
     """Format priority with modern badges"""
     pri = (priority or "").lower()
     if pri == "high":
-        return Text("HIGH", style="bold white on red")
+        return Text("🔴 HIGH", style="bold white on red")
     elif pri == "med":
-        return Text("MED", style="bold black on yellow")
+        return Text("🟡 MED", style="bold black on yellow")
     elif pri == "low":
-        return Text("LOW", style="bold white on blue")
+        return Text("🔵 LOW", style="bold white on blue")
     return Text("—", style="dim")
 
 
 def _format_due(due_str: str) -> Text:
-    """Format due date with relative time and urgency indicators"""
+    """Format due date with badge-style UX (OVERDUE / TODAY / IN Nd)."""
     if not due_str:
         return Text("—", style="dim")
     try:
@@ -39,19 +57,29 @@ def _format_due(due_str: str) -> Text:
         today = date.today()
         days_until = (due_date - today).days
 
+        out = Text()
         if days_until < 0:
             overdue_days = abs(days_until)
-            return Text(f"⚠️  {due_str} ({overdue_days}d overdue)", style="bold red")
-        elif days_until == 0:
-            return Text(f"🔥 Today", style="bold yellow")
-        elif days_until == 1:
-            return Text(f"⏰ Tomorrow", style="yellow")
-        elif days_until <= 3:
-            return Text(f"⏰ {due_str} ({days_until}d)", style="yellow")
-        elif days_until <= 7:
-            return Text(f"📅 {due_str} ({days_until}d)", style="cyan")
-        else:
-            return Text(f"📅 {due_str}", style="bright_cyan")
+            out.append("OVERDUE", style="bold white on red")
+            out.append(" ")
+            out.append(due_str, style="dim")
+            out.append(f" ({overdue_days}d)", style="red")
+            return out
+        if days_until == 0:
+            out.append("TODAY", style="bold black on yellow")
+            out.append(" ")
+            out.append(due_str, style="dim")
+            return out
+
+        out.append(
+            f"IN {days_until}d",
+            style=(
+                "bold black on cyan" if days_until <= 7 else "bold black on bright_cyan"
+            ),
+        )
+        out.append(" ")
+        out.append(due_str, style="dim")
+        return out
     except (ValueError, TypeError):
         return Text(due_str, style="dim")
 

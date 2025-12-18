@@ -20,12 +20,22 @@ interface TodoDatabase {
     tasks: Task[];
 }
 
+// Set during activation (used to refresh tree view when status changes)
+let todoTreeProvider: { refresh: () => void } | undefined;
+
 class TodoStatusBar {
     private statusBarItem: vscode.StatusBarItem;
     private refreshTimer?: NodeJS.Timeout;
     private config: vscode.WorkspaceConfiguration;
+    private fileWatcher?: fs.FSWatcher;
+    private fileWatchDebounce?: NodeJS.Timeout;
+    private watchedDbPath: string = '';
+    private context: vscode.ExtensionContext;
+    private lastLoadError: string = '';
+    private lastNotifiedErrorKey: string = '';
 
     constructor(context: vscode.ExtensionContext) {
+        this.context = context;
         this.config = vscode.workspace.getConfiguration('todo-cli');
         this.statusBarItem = vscode.window.createStatusBarItem(
             'todo-cli.statusBar',
@@ -47,6 +57,11 @@ class TodoStatusBar {
         });
         context.subscriptions.push(openListCommand);
 
+        const addFromEditorCommand = vscode.commands.registerCommand('todo-cli.addFromEditor', () => {
+            this.addTodoFromEditor();
+        });
+        context.subscriptions.push(addFromEditorCommand);
+
         const configureCommand = vscode.commands.registerCommand('todo-cli.configure', () => {
             this.configureDatabase();
         });
@@ -66,6 +81,11 @@ class TodoStatusBar {
             this.initializeDatabase();
         });
         context.subscriptions.push(initializeCommand);
+
+        const selectWorkspaceFolderCommand = vscode.commands.registerCommand('todo-cli.selectWorkspaceFolder', () => {
+            this.selectWorkspaceFolder();
+        });
+        context.subscriptions.push(selectWorkspaceFolderCommand);
 
         // Watch for configuration changes (workspace and global)
         context.subscriptions.push(
@@ -99,16 +119,23 @@ class TodoStatusBar {
     }
 
     public resolveDbPath(): string {
-        // 1. Check VSCode config (workspace first, then global)
-        const workspaceConfig = vscode.workspace.getConfiguration('todo-cli').get<string>('dbPath', '');
+        // 1. Check VSCode config (workspace-folder scope first, then global)
+        const folders = vscode.workspace.workspaceFolders || [];
+        const activeFolderPath = this.context.globalState.get<string>('todo-cli.activeWorkspaceFolderPath', '');
+        const activeFolder = folders.find(f => f.uri.fsPath === activeFolderPath) || folders[0];
+
+        const workspaceConfig = activeFolder
+            ? vscode.workspace.getConfiguration('todo-cli', activeFolder.uri).get<string>('dbPath', '')
+            : '';
         const globalConfig = vscode.workspace.getConfiguration('todo-cli', null).get<string>('dbPath', '');
-        
-        // Prefer workspace setting over global
+
+        // Prefer workspace-folder setting over global
         const configPath = workspaceConfig || globalConfig;
         const configScope = workspaceConfig ? 'workspace' : (globalConfig ? 'global' : 'none');
-        
+
         if (configPath) {
-            const resolved = this.expandPath(configPath);
+            const baseDir = activeFolder ? activeFolder.uri.fsPath : undefined;
+            const resolved = this.expandPath(configPath, baseDir);
             console.log(`[Todo CLI] Using VSCode ${configScope} config path: ${resolved}`);
             return resolved;
         }
@@ -133,45 +160,18 @@ class TodoStatusBar {
                 if (configData.db_path) {
                     let dbPath = configData.db_path.trim();
                     if (dbPath) {
-                        // Handle relative paths - try multiple resolution strategies
-                        if (!path.isAbsolute(dbPath)) {
-                            // Strategy 1: Relative to config directory
-                            const relativeToConfig = path.resolve(configDir, dbPath);
-                            if (fs.existsSync(relativeToConfig)) {
-                                console.log(`[Todo CLI] Found relative to config dir: ${relativeToConfig}`);
-                                return relativeToConfig;
-                            }
-                            
-                            // Strategy 2: Relative to home directory
-                            const relativeToHome = path.resolve(os.homedir(), dbPath);
-                            if (fs.existsSync(relativeToHome)) {
-                                console.log(`[Todo CLI] Found relative to home: ${relativeToHome}`);
-                                return relativeToHome;
-                            }
-                            
-                            // Strategy 3: Try in Documents/todo-cli (common default location)
-                            const docsPath = path.join(os.homedir(), 'Documents', 'todo-cli', dbPath);
-                            if (fs.existsSync(docsPath)) {
-                                console.log(`[Todo CLI] Found in Documents/todo-cli: ${docsPath}`);
-                                return docsPath;
-                            }
-                            
-                            // Strategy 4: Expand and resolve (handles ~)
+                        // Match CLI behavior:
+                        // - if absolute (or ~), use as-is (after ~ expansion)
+                        // - if relative, resolve relative to config directory
+                        if (dbPath.startsWith('~')) {
                             dbPath = this.expandPath(dbPath);
-                            if (fs.existsSync(dbPath)) {
-                                console.log(`[Todo CLI] Found after expansion: ${dbPath}`);
-                                return dbPath;
-                            }
-                            
-                            // If still not found, return the expanded path anyway (might be created later)
-                            console.log(`[Todo CLI] Relative path not found, using: ${dbPath}`);
-                            return dbPath;
+                        } else if (!path.isAbsolute(dbPath)) {
+                            dbPath = path.resolve(configDir, dbPath);
                         } else {
-                            // Absolute path - just expand ~
-                            dbPath = this.expandPath(dbPath);
-                            console.log(`[Todo CLI] Using absolute config path: ${dbPath}`);
-                            return dbPath;
+                            dbPath = path.resolve(dbPath);
                         }
+                        console.log(`[Todo CLI] Using config file path: ${dbPath}`);
+                        return dbPath;
                     }
                 }
             } catch (e) {
@@ -187,11 +187,41 @@ class TodoStatusBar {
         return defaultPath;
     }
 
-    private expandPath(filePath: string): string {
+    private expandPath(filePath: string, baseDir?: string): string {
         // Expand ~ to home directory
-        let expanded = filePath.replace(/^~/, os.homedir());
-        // Resolve to absolute path
+        const expanded = filePath.replace(/^~/, os.homedir());
+        // Resolve relative paths against workspace folder when available
+        if (!path.isAbsolute(expanded) && baseDir) {
+            return path.resolve(baseDir, expanded);
+        }
         return path.resolve(expanded);
+    }
+
+    private async selectWorkspaceFolder(): Promise<void> {
+        const folders = vscode.workspace.workspaceFolders || [];
+        if (folders.length <= 1) {
+            vscode.window.showInformationMessage('No multi-root workspace detected.');
+            return;
+        }
+
+        const picks = folders.map(f => ({
+            label: f.name,
+            description: f.uri.fsPath,
+            folder: f,
+        }));
+
+        const selected = await vscode.window.showQuickPick(picks, {
+            placeHolder: 'Select workspace folder for Todo CLI database',
+            ignoreFocusOut: true,
+        });
+
+        if (!selected) {
+            return;
+        }
+
+        await this.context.globalState.update('todo-cli.activeWorkspaceFolderPath', selected.folder.uri.fsPath);
+        this.updateStatus();
+        this.startAutoRefresh();
     }
 
     private getConfigDir(): string {
@@ -245,12 +275,13 @@ class TodoStatusBar {
         }
     }
 
-    private loadTasks(): TodoDatabase | null {
+    public loadTasks(): TodoDatabase | null {
         const dbPath = this.resolveDbPath();
         console.log(`[Todo CLI] Resolved DB path: ${dbPath}`);
         console.log(`[Todo CLI] Path exists: ${fs.existsSync(dbPath)}`);
         
         if (!fs.existsSync(dbPath)) {
+            this.lastLoadError = '';
             console.log(`[Todo CLI] Database file not found at: ${dbPath}`);
             
             // Try to create default database
@@ -277,12 +308,81 @@ class TodoStatusBar {
             const data = fs.readFileSync(dbPath, 'utf8');
             const db: TodoDatabase = JSON.parse(data);
             db.tasks = db.tasks || [];
+            // Schema/version sanity
+            const rawVersion: any = (db as any).version ?? 1;
+            const version = Number(rawVersion);
+            if (!Number.isFinite(version)) {
+                (db as any).version = 1;
+                this.saveDatabase(dbPath, db);
+            } else if (version > 1) {
+                this.lastLoadError = `Unsupported DB version: ${version}`;
+                return null;
+            } else if (version !== 1) {
+                (db as any).version = 1;
+                this.saveDatabase(dbPath, db);
+            }
+            if (!(db as any).next_id || typeof (db as any).next_id !== 'number') {
+                const maxId = db.tasks.reduce((m, t) => Math.max(m, t.id || 0), 0);
+                (db as any).next_id = maxId + 1;
+                this.saveDatabase(dbPath, db);
+            }
+            this.lastLoadError = '';
             console.log(`[Todo CLI] Loaded ${db.tasks.length} tasks from database`);
             return db;
         } catch (error) {
+            this.lastLoadError = String(error);
             console.error('[Todo CLI] Error loading todo database:', error);
             return null;
         }
+    }
+
+    private notifyDbIssueOnce(key: string, message: string, actions: string[]): void {
+        if (this.lastNotifiedErrorKey === key) {
+            return;
+        }
+        this.lastNotifiedErrorKey = key;
+        vscode.window.showWarningMessage(message, ...actions).then(selection => {
+            if (!selection) return;
+            if (selection === 'Fix Path') {
+                vscode.commands.executeCommand('todo-cli.configure');
+            } else if (selection === 'Open DB') {
+                const dbPath = this.resolveDbPath();
+                vscode.commands.executeCommand('vscode.open', vscode.Uri.file(dbPath));
+            } else if (selection === 'Initialize') {
+                vscode.commands.executeCommand('todo-cli.initializeDatabase');
+            } else if (selection === 'Show Path') {
+                vscode.commands.executeCommand('todo-cli.showCurrentPath');
+            }
+        });
+    }
+
+    private saveDatabase(dbPath: string, db: TodoDatabase): boolean {
+        try {
+            const parentDir = path.dirname(dbPath);
+            if (!fs.existsSync(parentDir)) {
+                fs.mkdirSync(parentDir, { recursive: true });
+            }
+
+            // Atomic-ish write: write temp then replace
+            const tmpPath = `${dbPath}.tmp`;
+            fs.writeFileSync(tmpPath, JSON.stringify(db, null, 2), 'utf8');
+            fs.renameSync(tmpPath, dbPath);
+            return true;
+        } catch (error) {
+            console.error('[Todo CLI] Error saving database:', error);
+            return false;
+        }
+    }
+
+    public updateDatabase(mutator: (db: TodoDatabase) => void): TodoDatabase | null {
+        const dbPath = this.resolveDbPath();
+        const db = this.loadTasks();
+        if (!db) {
+            return null;
+        }
+        mutator(db);
+        const ok = this.saveDatabase(dbPath, db);
+        return ok ? db : null;
     }
 
     private calculateStats(db: TodoDatabase) {
@@ -311,10 +411,28 @@ class TodoStatusBar {
             
             if (!db) {
                 const dbPath = this.resolveDbPath();
-                this.statusBarItem.text = '$(checklist) Todo: No database';
-                this.statusBarItem.backgroundColor = undefined;
-                this.statusBarItem.tooltip = `Todo database not found at:\n${dbPath}\n\nClick to configure.`;
-                this.statusBarItem.show();
+                if (this.lastLoadError) {
+                    this.statusBarItem.text = '$(error) Todo: DB error';
+                    this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+                    this.statusBarItem.tooltip = `Todo database error at:\n${dbPath}\n\n${this.lastLoadError}\n\nFix: Configure path, open DB, or re-initialize.`;
+                    this.statusBarItem.show();
+                    this.notifyDbIssueOnce(
+                        `db-error:${dbPath}`,
+                        `Todo CLI: DB error at ${dbPath}\n${this.lastLoadError}`,
+                        ['Fix Path', 'Open DB', 'Initialize', 'Show Path']
+                    );
+                } else {
+                    this.statusBarItem.text = '$(checklist) Todo: No database';
+                    this.statusBarItem.backgroundColor = undefined;
+                    this.statusBarItem.tooltip = `Todo database not found at:\n${dbPath}\n\nClick to configure or initialize.`;
+                    this.statusBarItem.show();
+                    this.notifyDbIssueOnce(
+                        `db-missing:${dbPath}`,
+                        `Todo CLI: database not found at ${dbPath}`,
+                        ['Fix Path', 'Initialize', 'Show Path']
+                    );
+                }
+                todoTreeProvider?.refresh();
                 return;
             }
 
@@ -365,12 +483,14 @@ class TodoStatusBar {
         
         this.statusBarItem.tooltip = tooltip;
         this.statusBarItem.show();
+        todoTreeProvider?.refresh();
         } catch (error) {
             console.error('Todo CLI Extension Error:', error);
             this.statusBarItem.text = '$(error) Todo: Error';
             this.statusBarItem.tooltip = `Error loading todos: ${error}`;
             this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
             this.statusBarItem.show();
+            todoTreeProvider?.refresh();
         }
     }
 
@@ -379,10 +499,65 @@ class TodoStatusBar {
             clearInterval(this.refreshTimer);
         }
 
+        // Start file watcher for instant refresh on DB changes
+        this.startFileWatch();
+
+        // Keep polling as a fallback (e.g., network FS where watch is unreliable)
         const interval = this.config.get<number>('refreshInterval', 5000);
-        this.refreshTimer = setInterval(() => {
-            this.updateStatus();
-        }, interval);
+        if (interval > 0) {
+            this.refreshTimer = setInterval(() => {
+                this.updateStatus();
+            }, interval);
+        }
+    }
+
+    private stopFileWatch(): void {
+        try {
+            this.fileWatcher?.close();
+        } catch {
+            // ignore
+        }
+        this.fileWatcher = undefined;
+        this.watchedDbPath = '';
+        if (this.fileWatchDebounce) {
+            clearTimeout(this.fileWatchDebounce);
+            this.fileWatchDebounce = undefined;
+        }
+    }
+
+    private startFileWatch(): void {
+        const dbPath = this.resolveDbPath();
+        if (dbPath && dbPath === this.watchedDbPath && this.fileWatcher) {
+            return;
+        }
+
+        this.stopFileWatch();
+        this.watchedDbPath = dbPath;
+
+        const dir = path.dirname(dbPath);
+        const base = path.basename(dbPath);
+        if (!fs.existsSync(dir)) {
+            return;
+        }
+
+        try {
+            this.fileWatcher = fs.watch(dir, { persistent: false }, (_eventType, filename) => {
+                // Some platforms may not provide filename
+                if (filename && filename.toString() !== base) {
+                    return;
+                }
+                if (this.fileWatchDebounce) {
+                    clearTimeout(this.fileWatchDebounce);
+                }
+                this.fileWatchDebounce = setTimeout(() => {
+                    console.log('[Todo CLI] DB file change detected, refreshing...');
+                    this.updateStatus();
+                }, 200);
+            });
+        } catch (err) {
+            console.error('[Todo CLI] Failed to start file watcher:', err);
+            // Keep polling fallback running
+        }
     }
 
     private async initializeDatabase(): Promise<void> {
@@ -421,39 +596,234 @@ class TodoStatusBar {
     }
 
     private async openTodoList(): Promise<void> {
-        const db = this.loadTasks();
-        if (!db) {
-            vscode.window.showInformationMessage('Todo database not found. Run "todo init" first.');
-            return;
-        }
+        type TaskPickItem = vscode.QuickPickItem & { task: Task };
 
-        const stats = this.calculateStats(db);
-        const pendingTasks = db.tasks.filter(t => !t.done);
-        
-        if (pendingTasks.length === 0) {
-            vscode.window.showInformationMessage('No pending tasks! 🎉');
-            return;
-        }
+        const buildItems = (db: TodoDatabase): TaskPickItem[] => {
+            const pending = db.tasks.filter(t => !t.done);
+            return pending.map(task => {
+                const pri = task.priority ? task.priority.toLowerCase() : '';
+                const priIcon = pri === 'high' ? '$(warning) ' : pri === 'med' ? '$(circle-filled) ' : pri === 'low' ? '$(circle-outline) ' : '';
+                const dueText = task.due ? `Due: ${task.due}` : '';
+                const tagText = task.tags?.length ? `Tags: ${task.tags.join(', ')}` : '';
+                return {
+                    label: `${priIcon}${task.text}`,
+                    description: `#${task.id}` + (task.priority ? `  ${task.priority}` : ''),
+                    detail: [dueText, tagText].filter(Boolean).join('  |  '),
+                    task,
+                };
+            });
+        };
 
-        // Show quick pick with tasks
-        const items = pendingTasks.map(task => ({
-            label: `$(circle-outline) ${task.text}`,
-            description: task.priority ? `Priority: ${task.priority}` : '',
-            detail: task.due ? `Due: ${task.due}` : task.tags?.length ? `Tags: ${task.tags.join(', ')}` : '',
-            task: task
-        }));
+        const qp = vscode.window.createQuickPick<TaskPickItem>();
+        qp.matchOnDescription = true;
+        qp.matchOnDetail = true;
+        qp.placeholder = 'Enter=toggle done, e=edit, d=delete, p=priority, t=add tag (type to search)';
 
-        const selected = await vscode.window.showQuickPick(items, {
-            placeHolder: `Select a task (${pendingTasks.length} pending)`,
-            canPickMany: false
+        let active: TaskPickItem | undefined;
+
+        const refresh = () => {
+            const db = this.loadTasks();
+            if (!db) {
+                qp.hide();
+                vscode.window.showErrorMessage('Todo database not found. Use "Todo CLI: Configure Database Path" or "Initialize Database".');
+                return;
+            }
+            const items = buildItems(db);
+            qp.items = items;
+            if (items.length === 0) {
+                qp.hide();
+                vscode.window.showInformationMessage('No pending tasks! 🎉');
+                this.updateStatus();
+                return;
+            }
+            // Keep active selection stable
+            if (!active) {
+                qp.activeItems = [items[0]];
+            }
+            this.updateStatus();
+        };
+
+        const nowIso = () => new Date().toISOString();
+
+        const toggleDone = async (taskId: number) => {
+            const updated = this.updateDatabase(db => {
+                const t = db.tasks.find(x => x.id === taskId);
+                if (!t) return;
+                t.done = !t.done;
+                t.done_at = t.done ? nowIso() : '';
+            });
+            if (!updated) {
+                vscode.window.showErrorMessage('Failed to update task.');
+            }
+        };
+
+        const editTask = async (task: Task) => {
+            const text = await vscode.window.showInputBox({
+                prompt: 'Edit task text',
+                value: task.text || '',
+            });
+            if (text === undefined) return;
+            const updated = this.updateDatabase(db => {
+                const t = db.tasks.find(x => x.id === task.id);
+                if (!t) return;
+                t.text = text.trim();
+            });
+            if (!updated) vscode.window.showErrorMessage('Failed to edit task.');
+        };
+
+        const deleteTask = async (task: Task) => {
+            const confirm = await vscode.window.showWarningMessage(
+                `Delete task #${task.id}?`,
+                { modal: true },
+                'Delete'
+            );
+            if (confirm !== 'Delete') return;
+            const updated = this.updateDatabase(db => {
+                db.tasks = db.tasks.filter(x => x.id !== task.id);
+            });
+            if (!updated) vscode.window.showErrorMessage('Failed to delete task.');
+        };
+
+        const changePriority = async (task: Task) => {
+            const choice = await vscode.window.showQuickPick(
+                [
+                    { label: 'high', description: 'High priority' },
+                    { label: 'med', description: 'Medium priority' },
+                    { label: 'low', description: 'Low priority' },
+                    { label: '(none)', description: 'Clear priority' },
+                ],
+                { placeHolder: `Priority for #${task.id}` }
+            );
+            if (!choice) return;
+            const value = choice.label === '(none)' ? '' : choice.label;
+            const updated = this.updateDatabase(db => {
+                const t = db.tasks.find(x => x.id === task.id);
+                if (!t) return;
+                t.priority = value;
+            });
+            if (!updated) vscode.window.showErrorMessage('Failed to update priority.');
+        };
+
+        const addTag = async (task: Task) => {
+            const tagInput = await vscode.window.showInputBox({
+                prompt: `Add tag(s) to #${task.id} (comma or space separated)`,
+            });
+            if (!tagInput) return;
+            const tags = tagInput
+                .split(/[, ]+/)
+                .map(s => s.trim())
+                .filter(Boolean);
+            if (tags.length === 0) return;
+            const updated = this.updateDatabase(db => {
+                const t = db.tasks.find(x => x.id === task.id);
+                if (!t) return;
+                const existing = new Set((t.tags || []).map(x => x.trim()).filter(Boolean));
+                for (const tg of tags) existing.add(tg);
+                t.tags = Array.from(existing).sort();
+            });
+            if (!updated) vscode.window.showErrorMessage('Failed to add tag(s).');
+        };
+
+        qp.onDidChangeActive(items => {
+            active = items[0];
         });
 
-        if (selected) {
-            // Open terminal and run todo command
-            const terminal = vscode.window.createTerminal('Todo CLI');
-            terminal.sendText(`todo done ${selected.task.id}`);
-            terminal.show();
+        qp.onDidAccept(async () => {
+            const item = active ?? qp.selectedItems[0];
+            if (!item) return;
+            // Enter toggles done
+            await toggleDone(item.task.id);
+            refresh();
+        });
+
+        qp.onDidChangeValue(async (value) => {
+            const cmd = value.trim().toLowerCase();
+            if (!cmd) return;
+            const item = active ?? qp.activeItems[0];
+            if (!item) return;
+
+            if (cmd === 'e') {
+                qp.value = '';
+                await editTask(item.task);
+                refresh();
+            } else if (cmd === 'd') {
+                qp.value = '';
+                await deleteTask(item.task);
+                refresh();
+            } else if (cmd === 'p') {
+                qp.value = '';
+                await changePriority(item.task);
+                refresh();
+            } else if (cmd === 't') {
+                qp.value = '';
+                await addTag(item.task);
+                refresh();
+            }
+        });
+
+        qp.onDidHide(() => qp.dispose());
+
+        // Initial load
+        refresh();
+        qp.show();
+    }
+
+    private async addTodoFromEditor(): Promise<void> {
+        const editor = vscode.window.activeTextEditor;
+        let seedText = '';
+        let fileHint = '';
+
+        if (editor) {
+            const selText = editor.document.getText(editor.selection).trim();
+            seedText = selText;
+            fileHint = path.basename(editor.document.fileName || '');
+            if (!seedText) {
+                const line = editor.document.lineAt(editor.selection.active.line).text.trim();
+                seedText = line;
+            }
         }
+
+        const prefill = seedText ? seedText : (fileHint ? `${fileHint}: ` : '');
+        const input = await vscode.window.showInputBox({
+            prompt: 'Add a new todo',
+            value: prefill,
+            placeHolder: 'Type your task…',
+            ignoreFocusOut: true,
+        });
+
+        if (input === undefined) {
+            return;
+        }
+        const text = input.trim();
+        if (!text) {
+            return;
+        }
+
+        const nowIso = () => new Date().toISOString();
+
+        const updated = this.updateDatabase(db => {
+            const id = db.next_id || 1;
+            db.tasks = db.tasks || [];
+            db.tasks.push({
+                id,
+                text,
+                done: false,
+                created_at: nowIso(),
+                done_at: '',
+                priority: '',
+                due: '',
+                tags: [],
+            });
+            db.next_id = id + 1;
+        });
+
+        if (!updated) {
+            vscode.window.showErrorMessage('Failed to add todo. Check DB path or initialize database.');
+            return;
+        }
+
+        this.updateStatus();
+        vscode.window.showInformationMessage(`✅ Added todo: ${text}`);
     }
 
     private async configureDatabase(): Promise<void> {
@@ -790,6 +1160,7 @@ class TodoStatusBar {
         if (this.refreshTimer) {
             clearInterval(this.refreshTimer);
         }
+        this.stopFileWatch();
         this.statusBarItem.dispose();
     }
 }
@@ -802,6 +1173,250 @@ export function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push({
             dispose: () => todoStatusBar.dispose()
         });
+
+        // Tree view (Explorer sidebar)
+        class TodoTreeItem extends vscode.TreeItem {
+            constructor(
+                public readonly node:
+                    | { kind: 'group'; group: 'priority' | 'due' | 'tags' }
+                    | { kind: 'bucket'; group: 'priority' | 'due' | 'tags'; key: string }
+                    | { kind: 'task'; task: Task },
+                label: string,
+                collapsibleState: vscode.TreeItemCollapsibleState
+            ) {
+                super(label, collapsibleState);
+            }
+        }
+
+        class TodoTreeDataProvider implements vscode.TreeDataProvider<TodoTreeItem> {
+            private _onDidChangeTreeData = new vscode.EventEmitter<TodoTreeItem | undefined | null | void>();
+            readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
+
+            constructor(private readonly statusBar: TodoStatusBar) {}
+
+            refresh(): void {
+                this._onDidChangeTreeData.fire();
+            }
+
+            getTreeItem(element: TodoTreeItem): vscode.TreeItem {
+                return element;
+            }
+
+            async getChildren(element?: TodoTreeItem): Promise<TodoTreeItem[]> {
+                const db = this.statusBar.loadTasks();
+                if (!db) {
+                    return [];
+                }
+
+                const pending = db.tasks.filter(t => !t.done);
+                const today = new Date().toISOString().split('T')[0];
+
+                if (!element) {
+                    return [
+                        new TodoTreeItem({ kind: 'group', group: 'priority' }, 'By Priority', vscode.TreeItemCollapsibleState.Collapsed),
+                        new TodoTreeItem({ kind: 'group', group: 'due' }, 'By Due', vscode.TreeItemCollapsibleState.Collapsed),
+                        new TodoTreeItem({ kind: 'group', group: 'tags' }, 'By Tag', vscode.TreeItemCollapsibleState.Collapsed),
+                    ];
+                }
+
+                if (element.node.kind === 'group') {
+                    const g = element.node.group;
+                    if (g === 'priority') {
+                        const buckets: Array<{ key: string; label: string; filter: (t: Task) => boolean }> = [
+                            { key: 'high', label: 'High', filter: t => (t.priority || '').toLowerCase() === 'high' },
+                            { key: 'med', label: 'Medium', filter: t => (t.priority || '').toLowerCase() === 'med' },
+                            { key: 'low', label: 'Low', filter: t => (t.priority || '').toLowerCase() === 'low' },
+                            { key: 'none', label: 'None', filter: t => !(t.priority || '').trim() },
+                        ];
+                        const out: TodoTreeItem[] = [];
+                        for (const b of buckets) {
+                            const count = pending.filter(b.filter).length;
+                            if (count <= 0) continue;
+                            out.push(
+                                new TodoTreeItem(
+                                    { kind: 'bucket', group: 'priority', key: b.key },
+                                    `${b.label} (${count})`,
+                                    vscode.TreeItemCollapsibleState.Collapsed
+                                )
+                            );
+                        }
+                        return out;
+                    }
+
+                    if (g === 'due') {
+                        const classify = (t: Task): string => {
+                            if (!t.due) return 'none';
+                            if (t.due < today) return 'overdue';
+                            if (t.due === today) return 'today';
+                            // soon = next 3 days
+                            const d = Date.parse(t.due);
+                            const dtoday = Date.parse(today);
+                            const days = Math.round((d - dtoday) / (1000 * 60 * 60 * 24));
+                            if (days <= 3) return 'soon';
+                            return 'upcoming';
+                        };
+                        const buckets: Array<{ key: string; label: string }> = [
+                            { key: 'overdue', label: 'Overdue' },
+                            { key: 'today', label: 'Today' },
+                            { key: 'soon', label: 'Soon' },
+                            { key: 'upcoming', label: 'Upcoming' },
+                            { key: 'none', label: 'No Due Date' },
+                        ];
+                        const out: TodoTreeItem[] = [];
+                        for (const b of buckets) {
+                            const count = pending.filter(t => classify(t) === b.key).length;
+                            if (count <= 0) continue;
+                            out.push(
+                                new TodoTreeItem(
+                                    { kind: 'bucket', group: 'due', key: b.key },
+                                    `${b.label} (${count})`,
+                                    vscode.TreeItemCollapsibleState.Collapsed
+                                )
+                            );
+                        }
+                        return out;
+                    }
+
+                    // tags
+                    const tagSet = new Set<string>();
+                    for (const t of pending) {
+                        for (const tg of t.tags || []) tagSet.add(tg);
+                    }
+                    return Array.from(tagSet)
+                        .sort((a, b) => a.localeCompare(b))
+                        .map(tag => {
+                            const count = pending.filter(t => (t.tags || []).includes(tag)).length;
+                            return new TodoTreeItem(
+                                { kind: 'bucket', group: 'tags', key: tag },
+                                `#${tag} (${count})`,
+                                vscode.TreeItemCollapsibleState.Collapsed
+                            );
+                        });
+                }
+
+                if (element.node.kind === 'bucket') {
+                    const b = element.node;
+
+                    const byPriority = (t: Task) => {
+                        const pri = (t.priority || '').toLowerCase();
+                        if (b.key === 'none') return !pri;
+                        return pri === b.key;
+                    };
+                    const byDue = (t: Task) => {
+                        if (b.key === 'none') return !t.due;
+                        if (!t.due) return false;
+                        if (b.key === 'overdue') return t.due < today;
+                        if (b.key === 'today') return t.due === today;
+                        const d = Date.parse(t.due);
+                        const dtoday = Date.parse(today);
+                        const days = Math.round((d - dtoday) / (1000 * 60 * 60 * 24));
+                        if (b.key === 'soon') return days > 0 && days <= 3;
+                        if (b.key === 'upcoming') return days > 3;
+                        return false;
+                    };
+                    const byTag = (t: Task) => (t.tags || []).includes(b.key);
+
+                    const filtered = pending.filter(t => {
+                        if (b.group === 'priority') return byPriority(t);
+                        if (b.group === 'due') return byDue(t);
+                        return byTag(t);
+                    });
+
+                    return filtered
+                        .sort((a, c) => a.id - c.id)
+                        .map(task => {
+                            const item = new TodoTreeItem(
+                                { kind: 'task', task },
+                                task.text,
+                                vscode.TreeItemCollapsibleState.None
+                            );
+                            item.description = `#${task.id}` + (task.due ? ` • ${task.due}` : '');
+                            item.iconPath = new vscode.ThemeIcon('checklist');
+                            item.command = {
+                                command: 'todo-cli.tree.openTask',
+                                title: 'Show Task Details',
+                                arguments: [task],
+                            };
+                            return item;
+                        });
+                }
+
+                return [];
+            }
+        }
+
+        const provider = new TodoTreeDataProvider(todoStatusBar);
+        todoTreeProvider = provider;
+        context.subscriptions.push(vscode.window.registerTreeDataProvider('todo-cli.todosView', provider));
+
+        context.subscriptions.push(
+            vscode.commands.registerCommand('todo-cli.tree.openTask', async (task: Task) => {
+                const action = await vscode.window.showQuickPick(
+                    [
+                        { label: 'Toggle Done', key: 'toggle' },
+                        { label: 'Edit', key: 'edit' },
+                        { label: 'Delete', key: 'delete' },
+                        { label: 'Change Priority', key: 'priority' },
+                        { label: 'Add Tag', key: 'tag' },
+                    ],
+                    { placeHolder: `#${task.id}: ${task.text}` }
+                );
+                if (!action) return;
+
+                const nowIso = () => new Date().toISOString();
+
+                if (action.key === 'toggle') {
+                    todoStatusBar.updateDatabase(db => {
+                        const t = db.tasks.find(x => x.id === task.id);
+                        if (!t) return;
+                        t.done = !t.done;
+                        t.done_at = t.done ? nowIso() : '';
+                    });
+                } else if (action.key === 'edit') {
+                    const text = await vscode.window.showInputBox({ prompt: 'Edit task text', value: task.text });
+                    if (text === undefined) return;
+                    todoStatusBar.updateDatabase(db => {
+                        const t = db.tasks.find(x => x.id === task.id);
+                        if (!t) return;
+                        t.text = text.trim();
+                    });
+                } else if (action.key === 'delete') {
+                    const confirm = await vscode.window.showWarningMessage(`Delete task #${task.id}?`, { modal: true }, 'Delete');
+                    if (confirm !== 'Delete') return;
+                    todoStatusBar.updateDatabase(db => {
+                        db.tasks = db.tasks.filter(x => x.id !== task.id);
+                    });
+                } else if (action.key === 'priority') {
+                    const choice = await vscode.window.showQuickPick(
+                        ['high', 'med', 'low', '(none)'],
+                        { placeHolder: `Priority for #${task.id}` }
+                    );
+                    if (!choice) return;
+                    const value = choice === '(none)' ? '' : choice;
+                    todoStatusBar.updateDatabase(db => {
+                        const t = db.tasks.find(x => x.id === task.id);
+                        if (!t) return;
+                        t.priority = value;
+                    });
+                } else if (action.key === 'tag') {
+                    const tagInput = await vscode.window.showInputBox({ prompt: 'Add tag(s) (comma/space separated)' });
+                    if (!tagInput) return;
+                    const tags = tagInput.split(/[, ]+/).map(s => s.trim()).filter(Boolean);
+                    if (!tags.length) return;
+                    todoStatusBar.updateDatabase(db => {
+                        const t = db.tasks.find(x => x.id === task.id);
+                        if (!t) return;
+                        const existing = new Set((t.tags || []).map(x => x.trim()).filter(Boolean));
+                        for (const tg of tags) existing.add(tg);
+                        t.tags = Array.from(existing).sort();
+                    });
+                }
+
+                provider.refresh();
+                // status bar refresh happens via updateStatus() calls; force one here
+                vscode.commands.executeCommand('todo-cli.refresh');
+            })
+        );
         
         // Check if we should create default database on first activation
         const isFirstActivation = context.globalState.get<boolean>('todo-cli.firstActivation', true);

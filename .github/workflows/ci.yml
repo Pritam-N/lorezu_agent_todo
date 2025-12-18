@@ -1,0 +1,66 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install CLI (dev)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "todo-cli[dev]"
+
+      - name: Run tests
+        run: |
+          python -m pytest -q
+        working-directory: todo-cli
+
+      - name: Build wheel
+        run: |
+          python -m pip install build
+          python -m build
+        working-directory: todo-cli
+
+      - name: Upload CLI dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: todo-cli-dist
+          path: todo-cli/dist/*
+
+  extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install deps
+        run: npm ci
+        working-directory: todo-cli-vscode-extension
+
+      - name: Compile
+        run: npm run compile
+        working-directory: todo-cli-vscode-extension
+
+      - name: Package VSIX
+        run: npx --yes @vscode/vsce package --allow-missing-repository
+        working-directory: todo-cli-vscode-extension
+
+      - name: Upload VSIX
+        uses: actions/upload-artifact@v4
+        with:
+          name: todo-cli-vsix
+          path: todo-cli-vscode-extension/*.vsix
+
+

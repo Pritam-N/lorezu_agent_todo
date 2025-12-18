@@ -1,5 +1,6 @@
 from __future__ import annotations
 import argparse, datetime as dt
+import json
 from pathlib import Path
 from typing import List
 from rich.console import Console
@@ -9,9 +10,25 @@ from rich.table import Table
 from rich.columns import Columns
 from rich import box
 from .model import Task
-from .storage import FileLock, load_tasks, save_tasks, sort_tasks
+from .storage import (
+    FileLock,
+    load_tasks,
+    save_tasks,
+    sort_tasks,
+    restore_latest_backup,
+    BACKUP_KEEP_DEFAULT,
+    archive_path_for_db,
+    append_tasks_to_archive,
+    save_db,
+    migrate_db_data,
+)
 from .ui import pick_tasks_to_done
-from .render import render_tasks_table, render_tasks_plain
+from .render import (
+    render_tasks_table,
+    render_tasks_plain,
+    calculate_statistics,
+    render_statistics_dashboard,
+)
 from .housekeeping import resolve_db_path, init_config
 from .config import load_config
 from .paths import config_path
@@ -294,6 +311,295 @@ def cmd_config(args, db_path: Path) -> None:
     )
 
 
+def cmd_doctor(args, db_path: Path) -> None:
+    """Validate (and optionally repair) the DB JSON."""
+    issues: List[str] = []
+    fixed = False
+
+    def add(msg: str) -> None:
+        issues.append(msg)
+
+    # Lock DB while inspecting/repairing to avoid concurrent writes
+    with FileLock(db_path.with_suffix(".lock")):
+        if not db_path.exists():
+            console.print()
+            console.print(
+                Panel(
+                    f"[bold red]❌ DB not found[/bold red]\n\n"
+                    f"[white]Expected DB at: [bold]{db_path}[/bold]\n"
+                    f"Run [bold cyan]todo init[/bold cyan] or set [bold cyan]--db[/bold cyan]/[bold cyan]TODO_DB[/bold cyan].[/white]",
+                    border_style="red",
+                )
+            )
+            console.print()
+            raise SystemExit(1)
+
+        raw = ""
+        data = None
+        try:
+            raw = db_path.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            add(f"Invalid JSON: {e}")
+            if args.fix and args.restore:
+                ok = restore_latest_backup(db_path, keep=BACKUP_KEEP_DEFAULT)
+                if ok:
+                    fixed = True
+                    add(
+                        f"Restored from latest backup (looked in {db_path.name}.1..{db_path.name}.{BACKUP_KEEP_DEFAULT})"
+                    )
+                    raw = db_path.read_text(encoding="utf-8")
+                    data = json.loads(raw)
+                else:
+                    add("No backup could be restored.")
+            if data is None:
+                console.print()
+                console.print(
+                    Panel(
+                        "[bold red]❌ Doctor found invalid JSON[/bold red]\n\n"
+                        + "\n".join(f"- {x}" for x in issues[:10])
+                        + ("\n- ..." if len(issues) > 10 else "")
+                        + "\n\n[white]Tip: run [bold cyan]todo doctor --fix --restore[/bold cyan] to restore from backup.[/white]",
+                        border_style="red",
+                    )
+                )
+                console.print()
+                raise SystemExit(1)
+
+        if not isinstance(data, dict):
+            add("Root must be an object")
+            if not args.fix:
+                raise SystemExit(1)
+            data = {}
+            fixed = True
+
+        version = data.get("version", 1)
+        try:
+            version = int(version)
+        except Exception:
+            add(f"version is not an int: {version!r}")
+            version = 1
+            fixed = True
+
+        next_id = data.get("next_id", 1)
+        try:
+            next_id = int(next_id)
+        except Exception:
+            add(f"next_id is not an int: {next_id!r}")
+            next_id = 1
+            fixed = True
+
+        tasks_raw = data.get("tasks", [])
+        if not isinstance(tasks_raw, list):
+            add("tasks must be a list")
+            if args.fix:
+                tasks_raw = []
+                fixed = True
+            else:
+                raise SystemExit(1)
+
+        repaired_tasks = []
+        seen_ids = set()
+        max_id = 0
+
+        for i, t in enumerate(tasks_raw):
+            if not isinstance(t, dict):
+                add(f"task[{i}] is not an object")
+                if args.fix:
+                    fixed = True
+                    continue
+                raise SystemExit(1)
+
+            # id
+            tid = t.get("id", 0)
+            try:
+                tid = int(tid)
+            except Exception:
+                add(f"task[{i}].id invalid: {tid!r}")
+                if args.fix:
+                    fixed = True
+                    tid = 0
+                else:
+                    raise SystemExit(1)
+
+            if tid <= 0 or tid in seen_ids:
+                add(f"task[{i}].id missing/duplicate: {tid!r}")
+                if not args.fix:
+                    raise SystemExit(1)
+                fixed = True
+                tid = 0
+
+            # normalize fields
+            text = str(t.get("text", "")).strip()
+            done = bool(t.get("done", False))
+            created_at = str(t.get("created_at", ""))
+            done_at = str(t.get("done_at", ""))
+            priority = str(t.get("priority", "")).lower().strip()
+            if priority not in ("", "low", "med", "high"):
+                add(f"task[{i}].priority invalid: {priority!r}")
+                if args.fix:
+                    priority = ""
+                    fixed = True
+                else:
+                    raise SystemExit(1)
+            due = str(t.get("due", "")).strip()
+            if due:
+                try:
+                    dt.date.fromisoformat(due)
+                except Exception:
+                    add(f"task[{i}].due invalid: {due!r}")
+                    if args.fix:
+                        due = ""
+                        fixed = True
+                    else:
+                        raise SystemExit(1)
+            tags = t.get("tags", [])
+            if tags is None:
+                tags = []
+                fixed = True
+            if not isinstance(tags, list) or not all(isinstance(x, str) for x in tags):
+                add(f"task[{i}].tags invalid (expected list[str])")
+                if args.fix:
+                    tags = (
+                        [str(x) for x in (tags or [])] if isinstance(tags, list) else []
+                    )
+                    fixed = True
+                else:
+                    raise SystemExit(1)
+
+            if tid == 0:
+                # assign later
+                repaired_tasks.append(
+                    {
+                        "id": 0,
+                        "text": text,
+                        "done": done,
+                        "created_at": created_at,
+                        "done_at": done_at,
+                        "priority": priority,
+                        "due": due,
+                        "tags": tags,
+                    }
+                )
+                continue
+
+            seen_ids.add(tid)
+            max_id = max(max_id, tid)
+            repaired_tasks.append(
+                {
+                    "id": tid,
+                    "text": text,
+                    "done": done,
+                    "created_at": created_at,
+                    "done_at": done_at,
+                    "priority": priority,
+                    "due": due,
+                    "tags": tags,
+                }
+            )
+
+        # Assign ids to any tasks that couldn't keep theirs
+        if any(t.get("id") == 0 for t in repaired_tasks):
+            if not args.fix:
+                raise SystemExit(1)
+            nid = max_id + 1
+            for t in repaired_tasks:
+                if t.get("id") == 0:
+                    t["id"] = nid
+                    nid += 1
+            max_id = nid - 1
+            fixed = True
+
+        # Ensure next_id is sane
+        if max_id + 1 != next_id:
+            add(f"next_id adjusted: {next_id} -> {max_id + 1}")
+            next_id = max_id + 1
+            fixed = True if args.fix else fixed
+
+        ok = len(issues) == 0
+        if args.fix:
+            # write repaired db (save_db will also rotate backups)
+            from .storage import save_db  # local import to avoid circular
+
+            save_db(
+                db_path,
+                {"version": version, "next_id": next_id, "tasks": repaired_tasks},
+            )
+            fixed = True
+
+    # Print report
+    title = (
+        "✅ Doctor OK"
+        if ok
+        else ("🛠️  Doctor repaired" if fixed and args.fix else "⚠️  Doctor found issues")
+    )
+    border = "green" if ok else ("yellow" if fixed and args.fix else "red")
+    body = (
+        "\n".join(f"- {x}" for x in issues[:15])
+        if issues
+        else "[dim]No issues found.[/dim]"
+    )
+    if len(issues) > 15:
+        body += "\n- ..."
+    console.print()
+    console.print(Panel(body, title=title, border_style=border))
+    console.print()
+
+    if not ok and not args.fix:
+        raise SystemExit(1)
+
+
+def cmd_migrate(args, db_path: Path) -> None:
+    """Migrate DB schema to the current version (best-effort)."""
+    with FileLock(db_path.with_suffix(".lock")):
+        if not db_path.exists():
+            console.print()
+            console.print(
+                Panel(
+                    f"[bold red]❌ DB not found[/bold red]\n\n"
+                    f"[white]Expected DB at: [bold]{db_path}[/bold][/white]",
+                    border_style="red",
+                )
+            )
+            console.print()
+            raise SystemExit(1)
+
+        try:
+            raw = db_path.read_text(encoding="utf-8")
+            db = json.loads(raw)
+        except json.JSONDecodeError as e:
+            console.print()
+            console.print(
+                Panel(
+                    f"[bold red]❌ Invalid JSON[/bold red]\n\n[white]{e}[/white]\n\n"
+                    f"[white]Try: [bold cyan]todo doctor --fix --restore[/bold cyan][/white]",
+                    border_style="red",
+                )
+            )
+            console.print()
+            raise SystemExit(1)
+
+        if not isinstance(db, dict):
+            raise SystemExit("DB root must be an object")
+
+        try:
+            migrated, from_v, to_v, notes = migrate_db_data(db)
+        except ValueError as e:
+            console.print()
+            console.print(Panel(f"[bold red]❌ {e}[/bold red]", border_style="red"))
+            console.print()
+            raise SystemExit(1)
+
+        save_db(db_path, migrated)
+
+    body = f"[white]Migrated DB: [bold]{db_path}[/bold]\\nFrom: {from_v} → To: {to_v}[/white]"
+    if notes:
+        body += "\\n\\n[bold]Notes:[/bold]\\n" + "\\n".join(f"- {n}" for n in notes)
+    console.print()
+    console.print(Panel(body, title="todo migrate", border_style="green"))
+    console.print()
+
+
 def cmd_add(args, db_path: Path) -> None:
     with FileLock(db_path.with_suffix(".lock")):
         next_id, tasks = load_tasks(db_path)
@@ -313,6 +619,23 @@ def cmd_add(args, db_path: Path) -> None:
     msg.append(f"#{t.id}", style="bold white")
     msg.append(f": {t.text}", style="white")
     console.print(msg)
+
+
+def cmd_qa(args, db_path: Path) -> None:
+    """Quick add: just text, no flags."""
+    # Normalize to cmd_add signature
+    args.p = ""
+    args.due = ""
+    args.tag = []
+    cmd_add(args, db_path)
+
+
+def cmd_today(args, db_path: Path) -> None:
+    """Quick add with due=today."""
+    args.p = ""
+    args.due = dt.date.today().isoformat()
+    args.tag = []
+    cmd_add(args, db_path)
 
 
 def cmd_ls(args, db_path: Path) -> None:
@@ -337,9 +660,102 @@ def cmd_ls(args, db_path: Path) -> None:
         render_tasks_table(tasks, title=title)
 
 
+def cmd_stats(args, db_path: Path) -> None:
+    """Show task statistics as a dashboard (or JSON for scripts)."""
+    _, tasks = load_tasks(db_path)
+    stats = calculate_statistics(tasks)
+    if args.json:
+        payload = {
+            "total": int(stats.get("total", 0)),
+            "pending": int(stats.get("pending", 0)),
+            "done": int(stats.get("done", 0)),
+            "high_priority": int(stats.get("high_priority", 0)),
+            "overdue": int(stats.get("overdue", 0)),
+            "due_today": int(stats.get("due_today", 0)),
+        }
+        print(json.dumps(payload, ensure_ascii=False))
+        return
+    render_statistics_dashboard(stats, title="Todo Stats")
+
+
+def cmd_completion(args, _db_path: Path) -> None:
+    """Print shell completion scripts (bash/zsh/fish)."""
+    cmds = [
+        "init",
+        "config",
+        "doctor",
+        "add",
+        "qa",
+        "today",
+        "ls",
+        "stats",
+        "done",
+        "pick",
+        "rm",
+        "edit",
+        "pri",
+        "due",
+        "tag",
+        "archive",
+        "clear-done",
+        "path",
+        "completion",
+    ]
+    cmd_list = " ".join(cmds)
+
+    shell = (args.shell or "").lower()
+    if shell == "bash":
+        print(
+            f"""# todo-cli bash completion
+_todo_complete() {{
+  local cur="${{COMP_WORDS[COMP_CWORD]}}"
+  if [[ $COMP_CWORD -le 1 ]]; then
+    COMPREPLY=( $(compgen -W "{cmd_list}" -- "$cur") )
+    return 0
+  fi
+}}
+complete -F _todo_complete todo
+"""
+        )
+        return
+
+    if shell == "zsh":
+        print(
+            f"""#compdef todo
+# todo-cli zsh completion
+_todo() {{
+  local -a commands
+  commands=({cmd_list})
+  _arguments '1:command:->cmds' '*::arg:->args'
+  case $state in
+    cmds)
+      _values 'command' $commands
+      ;;
+  esac
+}}
+_todo "$@"
+"""
+        )
+        return
+
+    if shell == "fish":
+        print(
+            f"""# todo-cli fish completion
+set -l cmds {cmd_list}
+complete -c todo -f -n "not __fish_seen_subcommand_from $cmds" -a "$cmds"
+"""
+        )
+        return
+
+    raise SystemExit("Unsupported shell. Use one of: bash, zsh, fish")
+
+
 def cmd_done(args, db_path: Path) -> None:
     with FileLock(db_path.with_suffix(".lock")):
         next_id, tasks = load_tasks(db_path)
+        # Ergonomic default: if no ID provided, open interactive picker.
+        if args.id is None and not getattr(args, "pick", False):
+            args.pick = True
         if args.pick:
             pending = [t for t in tasks if not t.done]
             chosen = pick_tasks_to_done(pending)
@@ -486,17 +902,64 @@ def cmd_tag(args, db_path: Path) -> None:
         save_tasks(db_path, next_id, tasks)
 
 
-def cmd_clear_done(args, db_path: Path) -> None:
+def _archive_done_tasks(db_path: Path) -> tuple[int, Path]:
+    """Move done tasks out of main DB into archive.json (same folder)."""
+    archive_path = archive_path_for_db(db_path)
     with FileLock(db_path.with_suffix(".lock")):
         next_id, tasks = load_tasks(db_path)
-        before = len(tasks)
+        done_tasks = [t for t in tasks if t.done]
+        if not done_tasks:
+            return (0, archive_path)
+        # Lock archive after main DB (consistent order)
+        with FileLock(archive_path.with_suffix(".lock")):
+            appended = append_tasks_to_archive(archive_path, done_tasks)
         tasks = [t for t in tasks if not t.done]
         save_tasks(db_path, next_id, tasks)
-    cleared_count = before - len(tasks)
+    return (appended, archive_path)
+
+
+def cmd_archive(args, db_path: Path) -> None:
+    # currently only supports archiving done tasks
+    count, ap = _archive_done_tasks(db_path)
+    if count == 0:
+        console.print("[dim]📭 No done tasks to archive[/dim]")
+        return
+    msg = Text()
+    msg.append("📦 Archived ", style="bold cyan")
+    msg.append(str(count), style="bold white")
+    msg.append(" done task" + ("s" if count != 1 else ""), style="white")
+    msg.append(" → ", style="dim")
+    msg.append(str(ap), style="bold white")
+    console.print(msg)
+
+
+def cmd_clear_done(args, db_path: Path) -> None:
+    if getattr(args, "force", False):
+        # Dangerous: truly delete (no archive)
+        with FileLock(db_path.with_suffix(".lock")):
+            next_id, tasks = load_tasks(db_path)
+            before = len(tasks)
+            tasks = [t for t in tasks if not t.done]
+            save_tasks(db_path, next_id, tasks)
+        cleared_count = before - len(tasks)
+        msg = Text()
+        msg.append("🗑️  Deleted ", style="bold red")
+        msg.append(str(cleared_count), style="bold white")
+        msg.append(f" done task{'s' if cleared_count != 1 else ''}", style="white")
+        console.print(msg)
+        return
+
+    # Default: archive instead of delete
+    count, ap = _archive_done_tasks(db_path)
+    if count == 0:
+        console.print("[dim]📭 No done tasks to clear[/dim]")
+        return
     msg = Text()
     msg.append("🧹 Cleared ", style="bold yellow")
-    msg.append(str(cleared_count), style="bold white")
-    msg.append(f" done task{'s' if cleared_count != 1 else ''}", style="white")
+    msg.append(str(count), style="bold white")
+    msg.append(f" done task{'s' if count != 1 else ''}", style="white")
+    msg.append(" (archived) → ", style="dim")
+    msg.append(str(ap), style="bold white")
     console.print(msg)
 
 
@@ -598,6 +1061,59 @@ The resolved DB path follows this precedence:
     sp.set_defaults(fn=cmd_config)
 
     sp = sub.add_parser(
+        "doctor",
+        help="Validate/repair the DB JSON",
+        description="Validate your todos DB and optionally repair common issues. Can restore from rotating backups.",
+        epilog=f"""
+Examples:
+  todo doctor
+  todo doctor --fix
+  todo doctor --fix --restore
+
+Backups:
+  On every write, todo-cli keeps rotating backups next to your DB:
+    {{"db"}}.1 .. {{"db"}}.{BACKUP_KEEP_DEFAULT}
+        """,
+        formatter_class=RichHelpFormatter,
+    )
+    sp.add_argument(
+        "--fix", action="store_true", help="Attempt to repair issues in-place"
+    )
+    sp.add_argument(
+        "--restore",
+        action="store_true",
+        help=f"Restore from latest backup if JSON is invalid (checks .1..{BACKUP_KEEP_DEFAULT})",
+    )
+    sp.set_defaults(fn=cmd_doctor)
+
+    sp = sub.add_parser(
+        "migrate",
+        help="Migrate DB schema to latest",
+        description="Migrate your DB JSON schema to the latest supported version (with backups).",
+        epilog="""
+Examples:
+  todo migrate
+        """,
+        formatter_class=RichHelpFormatter,
+    )
+    sp.set_defaults(fn=cmd_migrate)
+
+    sp = sub.add_parser(
+        "completion",
+        help="Generate shell completion",
+        description="Print a shell completion script to stdout.",
+        epilog="""
+Examples:
+  todo completion bash > todo.bash
+  todo completion zsh  > _todo
+  todo completion fish > todo.fish
+        """,
+        formatter_class=RichHelpFormatter,
+    )
+    sp.add_argument("shell", type=str, choices=["bash", "zsh", "fish"])
+    sp.set_defaults(fn=cmd_completion)
+
+    sp = sub.add_parser(
         "add",
         help="Add a new task",
         description="Add a new task to your todo list.",
@@ -637,6 +1153,34 @@ Date format: YYYY-MM-DD (e.g., 2025-12-20)
         help="Add a tag (can be used multiple times)",
     )
     sp.set_defaults(fn=cmd_add)
+
+    sp = sub.add_parser(
+        "qa",
+        help="Quick add (text only)",
+        description="Quickly add a task with just text (no flags).",
+        epilog="""
+Examples:
+  todo qa "Review PR"
+  todo qa "Ship release notes"
+        """,
+        formatter_class=RichHelpFormatter,
+    )
+    sp.add_argument("text", type=str, help="Task description")
+    sp.set_defaults(fn=cmd_qa)
+
+    sp = sub.add_parser(
+        "today",
+        help="Quick add due today",
+        description="Quickly add a task with due date set to today.",
+        epilog="""
+Examples:
+  todo today "Pay invoice"
+  todo today "Follow up with recruiter"
+        """,
+        formatter_class=RichHelpFormatter,
+    )
+    sp.add_argument("text", type=str, help="Task description")
+    sp.set_defaults(fn=cmd_today)
 
     sp = sub.add_parser(
         "ls",
@@ -692,11 +1236,28 @@ Sort options: created, due, priority
     sp.set_defaults(fn=cmd_ls)
 
     sp = sub.add_parser(
+        "stats",
+        help="Show stats dashboard",
+        description="Show task statistics: total, pending, done, high priority, overdue, due today.",
+        epilog="""
+Examples:
+  todo stats
+  todo stats --json
+        """,
+        formatter_class=RichHelpFormatter,
+    )
+    sp.add_argument(
+        "--json", action="store_true", help="Print stats as JSON (for scripts)"
+    )
+    sp.set_defaults(fn=cmd_stats)
+
+    sp = sub.add_parser(
         "done",
         help="Mark task(s) as done or undone",
         description="Mark a task as done by ID, or use interactive picker to select multiple tasks.",
         epilog="""
 Examples:
+  todo done                  # Interactive picker (marks selected as done)
   todo done 1                # Mark task #1 as done
   todo done 1 --undo         # Mark task #1 as undone
   todo done --pick           # Interactive picker to mark multiple tasks
@@ -849,16 +1410,40 @@ Use 'todo ls --tag TAG' to filter tasks by tag.
     sp.set_defaults(fn=cmd_tag)
 
     sp = sub.add_parser(
-        "clear-done",
-        help="Delete all completed tasks",
-        description="Permanently remove all tasks marked as done from your todo list.",
+        "archive",
+        help="Archive tasks (move out of main DB)",
+        description="Move tasks from the main DB into archive.json (same folder as your todos DB).",
         epilog="""
 Examples:
-  todo clear-done            # Remove all completed tasks
-
-Warning: This permanently deletes all done tasks. This action cannot be undone.
+  todo archive done          # Move all done tasks into archive.json
         """,
         formatter_class=RichHelpFormatter,
+    )
+    sp.add_argument(
+        "scope",
+        type=str,
+        nargs="?",
+        default="done",
+        choices=["done"],
+        help="What to archive (currently only: done)",
+    )
+    sp.set_defaults(fn=cmd_archive)
+
+    sp = sub.add_parser(
+        "clear-done",
+        help="Clear completed tasks (archives by default)",
+        description="Remove done tasks from the active list. By default, tasks are moved to archive.json (safer).",
+        epilog="""
+Examples:
+  todo clear-done            # Move all completed tasks to archive.json
+  todo clear-done --force    # Permanently delete done tasks (dangerous)
+        """,
+        formatter_class=RichHelpFormatter,
+    )
+    sp.add_argument(
+        "--force",
+        action="store_true",
+        help="Permanently delete done tasks instead of archiving",
     )
     sp.set_defaults(fn=cmd_clear_done)
 
@@ -926,12 +1511,12 @@ def run(argv: List[str]) -> int:
         raise
 
     db_path = resolve_db_path(args.db)
-    if args.cmd == "done" and not getattr(args, "pick", False) and args.id is None:
+    if args.cmd == "done" and args.id is None and getattr(args, "undo", False):
         console.print()
         console.print(
             Panel(
                 "[bold red]❌ Error[/bold red]\n\n"
-                "[white]todo done requires an ID, or use: [bold cyan]todo done --pick[/bold cyan][/white]",
+                "[white]todo done --undo requires an ID[/white]",
                 border_style="red",
             )
         )

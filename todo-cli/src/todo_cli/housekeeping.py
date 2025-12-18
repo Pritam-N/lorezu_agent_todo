@@ -6,8 +6,10 @@ from .config import AppConfig, load_config, save_config
 from .paths import config_path, default_db_path
 from .storage import FileLock, load_db, save_db
 
+
 def now_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+
 
 def resolve_db_path(cli_db: str = "") -> Path:
     if cli_db:
@@ -17,10 +19,17 @@ def resolve_db_path(cli_db: str = "") -> Path:
         return Path(env).expanduser()
     cfg = load_config()
     if cfg.db_path:
-        return Path(cfg.db_path).expanduser()
+        p = Path(cfg.db_path).expanduser()
+        # If config stores a relative path, resolve it relative to config directory
+        if not p.is_absolute():
+            p = (config_path().parent / p).expanduser()
+        return p
     return default_db_path()
 
-def init_config(db: Optional[str], dir_: Optional[str], force: bool = False) -> Tuple[Path, Path]:
+
+def init_config(
+    db: Optional[str], dir_: Optional[str], force: bool = False
+) -> Tuple[Path, Path]:
     cfg_p = config_path()
     cfg = load_config()
 

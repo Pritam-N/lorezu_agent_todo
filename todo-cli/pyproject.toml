@@ -15,6 +15,15 @@ dependencies = [
   "rich>=13.0.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/Pritam-N/lorezu_agent_todo"
+Repository = "https://github.com/Pritam-N/lorezu_agent_todo"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.0.0",
+]
+
 [project.scripts]
 todo = "todo_cli.main:main"
 
