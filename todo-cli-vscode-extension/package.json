@@ -2,7 +2,7 @@
   "name": "todo-cli-status",
   "displayName": "Todo CLI Status",
   "description": "Display todo-cli statistics in the VSCode status bar. Automatically creates default database on first use.",
-  "version": "0.1.2",
+  "version": "0.1.5",
   "publisher": "Pritam-N",
   "license": "MIT",
   "repository": {
@@ -26,55 +26,55 @@
   "contributes": {
     "commands": [
       {
-        "command": "todo-cli.refresh",
+        "command": "todo-cli-status.refresh",
         "title": "Todo CLI: Refresh Todo Status",
         "category": "Todo CLI",
         "icon": "$(refresh)"
       },
       {
-        "command": "todo-cli.openList",
+        "command": "todo-cli-status.openList",
         "title": "Todo CLI: Open Todo List",
         "category": "Todo CLI",
         "icon": "$(list-unordered)"
       },
       {
-        "command": "todo-cli.addFromEditor",
+        "command": "todo-cli-status.addFromEditor",
         "title": "Todo CLI: Add Todo From Editor",
         "category": "Todo CLI",
         "icon": "$(add)"
       },
       {
-        "command": "todo-cli.configure",
+        "command": "todo-cli-status.configure",
         "title": "Todo CLI: Configure Database Path",
         "category": "Todo CLI",
         "icon": "$(settings-gear)"
       },
       {
-        "command": "todo-cli.showCurrentPath",
+        "command": "todo-cli-status.showCurrentPath",
         "title": "Todo CLI: Show Current Database Path",
         "category": "Todo CLI",
         "icon": "$(file)"
       },
       {
-        "command": "todo-cli.openSettings",
+        "command": "todo-cli-status.openSettings",
         "title": "Todo CLI: Open Settings",
         "category": "Todo CLI",
         "icon": "$(settings)"
       },
       {
-        "command": "todo-cli.initializeDatabase",
+        "command": "todo-cli-status.initializeDatabase",
         "title": "Todo CLI: Initialize Database",
         "category": "Todo CLI",
         "icon": "$(file-add)"
       },
       {
-        "command": "todo-cli.selectWorkspaceFolder",
+        "command": "todo-cli-status.selectWorkspaceFolder",
         "title": "Todo CLI: Select Workspace Folder",
         "category": "Todo CLI",
         "icon": "$(repo)"
       },
       {
-        "command": "todo-cli.tree.openTask",
+        "command": "todo-cli-status.tree.openTask",
         "title": "Todo CLI: Show Task Details",
         "category": "Todo CLI"
       }
@@ -82,7 +82,7 @@
     "views": {
       "explorer": [
         {
-          "id": "todo-cli.todosView",
+          "id": "todo-cli-status.todosView",
           "name": "Todos"
         }
       ]
@@ -90,33 +90,33 @@
     "menus": {
       "statusBar/item/context": [
         {
-          "command": "todo-cli.refresh",
-          "when": "statusBarItem == 'todo-cli.statusBar'",
+          "command": "todo-cli-status.refresh",
+          "when": "statusBarItem == 'todo-cli-status.statusBar'",
           "group": "1_todo@1"
         },
         {
-          "command": "todo-cli.openList",
-          "when": "statusBarItem == 'todo-cli.statusBar'",
+          "command": "todo-cli-status.openList",
+          "when": "statusBarItem == 'todo-cli-status.statusBar'",
           "group": "1_todo@2"
         },
         {
-          "command": "todo-cli.showCurrentPath",
-          "when": "statusBarItem == 'todo-cli.statusBar'",
+          "command": "todo-cli-status.showCurrentPath",
+          "when": "statusBarItem == 'todo-cli-status.statusBar'",
           "group": "2_todo@1"
         },
         {
-          "command": "todo-cli.configure",
-          "when": "statusBarItem == 'todo-cli.statusBar'",
+          "command": "todo-cli-status.configure",
+          "when": "statusBarItem == 'todo-cli-status.statusBar'",
           "group": "2_todo@2"
         },
         {
-          "command": "todo-cli.openSettings",
-          "when": "statusBarItem == 'todo-cli.statusBar'",
+          "command": "todo-cli-status.openSettings",
+          "when": "statusBarItem == 'todo-cli-status.statusBar'",
           "group": "3_todo@1"
         },
         {
-          "command": "todo-cli.selectWorkspaceFolder",
-          "when": "statusBarItem == 'todo-cli.statusBar'",
+          "command": "todo-cli-status.selectWorkspaceFolder",
+          "when": "statusBarItem == 'todo-cli-status.statusBar'",
           "group": "3_todo@2"
         }
       ]

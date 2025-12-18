@@ -37,11 +37,16 @@ To validate and repair:
 
 It’s now safe by default:
 
-- `todo clear-done` archives completed tasks into `archive.json` (same folder as the DB)
+- `todo clear-done` archives completed tasks into `todos-archieved.json` (same folder as the DB)
 - Permanent delete (dangerous): `todo clear-done --force`
 
 You can also explicitly archive:
 - `todo archive done`
+
+### CLI: where are archived/deleted tasks stored?
+
+- Done-task archiving (`todo archive done`, `todo clear-done`) and task deletion (`todo rm <id>`) write to:
+  - `todos-archieved.json` (same folder as your active DB)
 
 ### Extension: commands don’t appear in Cursor/VSCode
 

@@ -13,7 +13,7 @@
    - Select it from the dropdown
 
 4. **Select the VSIX file:**
-   - Navigate to: `todo-cli-vscode-extension/todo-cli-status-0.1.0.vsix`
+   - Navigate to: `todo-cli-vscode-extension/todo-cli-status-*.vsix`
    - Click "Install"
 
 5. **Reload Cursor:**
@@ -28,12 +28,12 @@
 
 2. **Install using command:**
    ```bash
-   cursor --install-extension todo-cli-status-0.1.0.vsix
+   cursor --install-extension todo-cli-status-*.vsix
    ```
 
    Or with full path:
    ```bash
-   cursor --install-extension /Users/pritaman/Documents/Projects/lorezu_agent_todo/todo-cli-vscode-extension/todo-cli-status-0.1.0.vsix
+   cursor --install-extension /ABS/PATH/todo-cli-vscode-extension/todo-cli-status-*.vsix
    ```
 
 3. **Reload Cursor** when prompted
@@ -44,7 +44,7 @@
    - Click the Extensions icon in the sidebar (or `Cmd+Shift+X` / `Ctrl+Shift+X`)
 
 2. **Drag the VSIX file:**
-   - Drag `todo-cli-status-0.1.0.vsix` into the Extensions view
+   - Drag `todo-cli-status-*.vsix` into the Extensions view
    - Cursor should prompt to install
 
 ## Verify Installation
@@ -87,7 +87,13 @@
 
 1. **Check VSIX file exists:**
    ```bash
-   ls -lh todo-cli-status-0.1.0.vsix
+   ls -lh todo-cli-status-*.vsix
+   ```
+
+2. **(Re)build the VSIX locally:**
+   ```bash
+   cd todo-cli-vscode-extension
+   npx --yes @vscode/vsce package --allow-missing-repository
    ```
 
 2. **Try reinstalling:**

@@ -166,7 +166,9 @@ def save_db(db_path: Path, data: Dict[str, Any]) -> None:
 
 def archive_path_for_db(db_path: Path) -> Path:
     """Default archive path lives next to the main DB."""
-    return db_path.with_name("archive.json")
+    # Keep archive adjacent to the active DB file, so switching DB path also switches archive location.
+    # NOTE: filename uses user's requested spelling.
+    return db_path.with_name("todos-archieved.json")
 
 
 def append_tasks_to_archive(archive_path: Path, tasks: List[Task]) -> int:

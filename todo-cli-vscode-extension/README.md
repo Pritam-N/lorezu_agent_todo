@@ -5,15 +5,26 @@ A VSCode extension that displays your todo-cli statistics in the status bar.
 ## Features
 
 - 📊 **Status Bar Display**: Shows pending tasks, completed tasks, high priority items, and overdue tasks
-- 🔄 **Auto-refresh**: Automatically updates every 5 seconds (configurable)
+- 🔄 **Auto-refresh**: Automatically updates every 5 seconds (configurable) with **instant file-watch refresh** when DB changes
 - 🎨 **Color Coding**: 
   - Red background for overdue tasks
   - Yellow background for tasks due today or high priority
   - Green background when all tasks are done
 - 🖱️ **Interactive**: Click the status bar item to view and interact with your tasks
+- ⌨️ **Quick Pick actions**: In the todo list picker:
+  - Type to search
+  - If your text matches **no task**: `Enter` = **create new task**
+  - If you type `Add: something`: `Enter` = **create immediately** (even if there are matches)
+  - If your text matches existing tasks: arrow onto one and `Enter` = toggle done
+  - Or: type a new task and click the `+` button (top-right) = **add it instantly**
+  - Actions (prefix with `:` so typing words doesn’t trigger them): `:e` edit, `:d` delete, `:p` priority, `:t` add tag
+- 🗃️ **Recoverable deletes**: Deleted tasks are appended to `todos-archieved.json` next to your DB
+- ⚡ **Quick add defaults**: Quick-created tasks default to `priority=med` and `due=tomorrow`
+- 🌲 **Explorer Tree View**: Browse todos by **Priority / Due / Tag**
 - ⚙️ **Configurable**: Set custom database path (workspace or global) and refresh interval
 - ✨ **Auto-initialization**: Automatically creates default database file on first use
 - 📁 **Workspace Support**: Per-project database paths via workspace settings
+- 🧩 **Multi-root workspaces**: Select which folder’s DB settings are active
 
 ## Installation
 
@@ -68,12 +79,25 @@ The extension uses the same path resolution as the todo-cli:
 
 - `Todo CLI: Refresh Todo Status` - Manually refresh the status bar
 - `Todo CLI: Open Todo List` - Open quick pick with pending tasks
+- `Todo CLI: Add Todo From Editor` - Create a todo from selection/current line
 - `Todo CLI: Configure Database Path` - Set workspace or global database path
 - `Todo CLI: Show Current Database Path` - Display current path and configuration
 - `Todo CLI: Initialize Database` - Create/reset the database file
+- `Todo CLI: Select Workspace Folder` - Choose active folder in multi-root workspaces
 - `Todo CLI: Open Settings` - Open extension settings
 
 **Right-click the status bar item for quick access to all commands.**
+
+## Activation error: "command 'todo-cli.refresh' already exists"
+
+If you previously had another extension (or a dev-host copy) that registered `todo-cli.*` command IDs, VSCode may fail activation with:
+
+- `Todo CLI Extension failed to activate: Error: command 'todo-cli.refresh' already exists`
+
+This extension now uses a unique command namespace (`todo-cli-status.*`) to avoid collisions. If you still see the error:
+
+- Disable/uninstall the other conflicting extension, or
+- Reload VSCode/Cursor after removing older VSIX copies.
 
 ## Usage
 

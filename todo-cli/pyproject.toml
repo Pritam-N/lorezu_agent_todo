@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "todo-cli"
-version = "0.3.0"
+version = "0.1.2"
 description = "A tiny local TODO CLI with arrow-key interactive selection, rich table view, and init/config housekeeping."
 readme = "README.md"
 requires-python = ">=3.9"

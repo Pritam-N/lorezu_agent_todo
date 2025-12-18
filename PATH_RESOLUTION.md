@@ -35,4 +35,12 @@ Notes:
 - Workspace setting is resolved **relative to the workspace folder** if it is a relative path.
 - Config file relative `db_path` is resolved **relative to the config directory** (matching CLI behavior).
 
+### Archive file (recoverable deletes)
+
+Both the CLI and extension keep an archive file **next to the resolved DB path**:
+
+- If DB is `.../todos.json` → archive is `.../todos-archieved.json`
+
+This keeps “deleted/archived” tasks in the same place as the active DB when you switch DB locations.
+
 

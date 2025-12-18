@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 from .config import AppConfig, load_config, save_config
 from .paths import config_path, default_db_path
-from .storage import FileLock, load_db, save_db
+from .storage import FileLock, load_db, save_db, archive_path_for_db
 
 
 def now_iso() -> str:
@@ -33,7 +33,46 @@ def init_config(
     cfg_p = config_path()
     cfg = load_config()
 
-    # Determine db path
+    # Save config (only overwrite if empty or force)
+    if (cfg.db_path and not force) and not (db or dir_):
+        # Nothing specified and already set; keep existing configured path.
+        p = Path(cfg.db_path).expanduser()
+        if not p.is_absolute():
+            p = (config_path().parent / p).expanduser()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with FileLock(p.with_suffix(".lock")):
+            if not p.exists():
+                save_db(p, {"version": 1, "next_id": 1, "tasks": []})
+            else:
+                _ = load_db(p)
+        ap = archive_path_for_db(p)
+        with FileLock(ap.with_suffix(".lock")):
+            if not ap.exists():
+                save_db(ap, {"version": 1, "next_id": 1, "tasks": []})
+            else:
+                _ = load_db(ap)
+        return cfg_p, p
+
+    if cfg.db_path and not force and (db or dir_):
+        # User is trying to change without force: keep existing configured path, ensure it exists.
+        p = Path(cfg.db_path).expanduser()
+        if not p.is_absolute():
+            p = (config_path().parent / p).expanduser()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with FileLock(p.with_suffix(".lock")):
+            if not p.exists():
+                save_db(p, {"version": 1, "next_id": 1, "tasks": []})
+            else:
+                _ = load_db(p)
+        ap = archive_path_for_db(p)
+        with FileLock(ap.with_suffix(".lock")):
+            if not ap.exists():
+                save_db(ap, {"version": 1, "next_id": 1, "tasks": []})
+            else:
+                _ = load_db(ap)
+        return cfg_p, p
+
+    # Determine db path (new/overwrite)
     if dir_ and not db:
         db_path = Path(dir_).expanduser() / "todos.json"
     elif db:
@@ -49,14 +88,13 @@ def init_config(
         else:
             _ = load_db(db_path)
 
-    # Save config (only overwrite if empty or force)
-    if (cfg.db_path and not force) and not (db or dir_):
-        # nothing specified and already set; keep
-        return cfg_p, Path(cfg.db_path).expanduser()
-
-    if cfg.db_path and not force and (db or dir_):
-        # user is trying to change without force: keep existing but still ensure target exists
-        return cfg_p, Path(cfg.db_path).expanduser()
+    # Ensure archive file exists next to the DB (so deletes/archives are recoverable)
+    archive_path = archive_path_for_db(db_path)
+    with FileLock(archive_path.with_suffix(".lock")):
+        if not archive_path.exists():
+            save_db(archive_path, {"version": 1, "next_id": 1, "tasks": []})
+        else:
+            _ = load_db(archive_path)
 
     now = now_iso()
     if not cfg.created_at:

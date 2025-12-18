@@ -26,10 +26,17 @@ todo init --db-path ~/Documents/mytodos/todos.json
 todo init --dir ~/Documents/mytodos
 ```
 
+### Archive file (recoverable deletes)
+
+todo-cli keeps an archive file next to your active DB:
+
+- `todos-archieved.json` (same folder as your DB)
+
 ## Usage
 
 ```bash
 todo add "Fix Celery retries" --p high --due 2025-12-20 --tag backend --tag infra
+todo qa "Quick add"             # defaults: priority=med, due=tomorrow
 todo ls --pending --sort priority
 todo pick
 todo config

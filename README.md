@@ -73,12 +73,17 @@ todo init --db-path ~/Documents/mytodos/todos.json
 todo init --dir ~/Documents/mytodos
 ```
 
+**Archiving file**
+
+- Alongside your active DB, todo-cli keeps an archive file for recoverable deletes:
+  - `todos-archieved.json` (same folder as your DB)
+
 ### VSCode Extension Installation
 
 1. **Install from VSIX:**
    - Open Cursor/VSCode
    - `Cmd+Shift+P` / `Ctrl+Shift+P` → `Extensions: Install from VSIX...`
-   - Select `todo-cli-vscode-extension/todo-cli-status-0.1.1.vsix`
+   - Select the packaged file: `todo-cli-vscode-extension/todo-cli-status-*.vsix`
 
 2. **Or install from source:**
    ```bash
@@ -87,6 +92,13 @@ todo init --dir ~/Documents/mytodos
    npm run compile
    # Press F5 to run in Extension Development Host
    ```
+
+**Packaging VSIX locally (recommended)**
+
+```bash
+cd todo-cli-vscode-extension
+npx --yes @vscode/vsce package --allow-missing-repository
+```
 
 ---
 
@@ -99,6 +111,9 @@ todo init --dir ~/Documents/mytodos
 todo add "Fix Celery retries" --p high --due 2025-12-20 --tag backend --tag infra
 todo add "Refactor auth middleware" --p med --tag security
 todo add "Update documentation" --p low
+
+# Quick add (defaults: priority=med, due=tomorrow)
+todo qa "Follow up with recruiter"
 
 # List tasks
 todo ls                    # Show pending tasks (default)
@@ -118,7 +133,7 @@ todo done --pick           # Interactive picker
 
 # Manage tasks
 todo edit 1 "Updated task text"
-todo rm 1                  # Remove task
+todo rm 1                  # Remove task (archived to todos-archieved.json)
 todo pri 1 high            # Set priority
 todo due 1 2025-12-25      # Set due date
 todo due 1 none            # Clear due date
@@ -126,7 +141,10 @@ todo tag 1 add urgent      # Add tag
 todo tag 1 del urgent      # Remove tag
 
 # Maintenance
-todo clear-done            # Delete all completed tasks
+todo clear-done            # Archive completed tasks to todos-archieved.json (safer)
+todo clear-done --force    # Permanently delete completed tasks (dangerous)
+todo archive done          # Explicitly archive done tasks
+todo doctor --fix --restore  # Validate/repair DB (and restore from backups if needed)
 todo config                # Show configuration
 todo path                  # Show database path
 ```
@@ -134,16 +152,26 @@ todo path                  # Show database path
 ### VSCode Extension Usage
 
 1. **Status Bar**: View todo count at bottom-right of editor
-2. **Click Status Bar**: Open quick pick with pending tasks
+2. **Click Status Bar**: Open quick pick with tasks + search
 3. **Right-Click Status Bar**: Access configuration menu
 4. **Command Palette**: `Cmd+Shift+P` → `Todo CLI: [Command]`
+
+**Quick Pick rules (important)**
+
+- If your search text matches **0 tasks**: `Enter` creates a new task
+- If there are matches: arrow onto a task and `Enter` toggles done
+- Type `Add: ...` to force-create immediately (even if there are matches)
+- `+` button always adds the typed text
+- Actions (prefix with `:`): `:e` edit, `:d` delete (archived), `:p` priority, `:t` tag
 
 **Available Commands:**
 - `Todo CLI: Refresh Todo Status`
 - `Todo CLI: Open Todo List`
+- `Todo CLI: Add Todo From Editor`
 - `Todo CLI: Configure Database Path`
 - `Todo CLI: Show Current Database Path`
 - `Todo CLI: Initialize Database`
+- `Todo CLI: Select Workspace Folder`
 - `Todo CLI: Open Settings`
 
 ---
@@ -230,7 +258,7 @@ lorezu_agent_todo/
 │   ├── src/
 │   │   └── extension.ts            # Extension main file
 │   ├── package.json
-│   └── todo-cli-status-0.1.1.vsix # Packaged extension
+│   └── todo-cli-status-*.vsix     # Packaged extension
 │
 └── README.md
 ```

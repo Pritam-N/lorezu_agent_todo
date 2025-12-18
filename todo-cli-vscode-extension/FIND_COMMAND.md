@@ -77,13 +77,13 @@ After installing/updating:
 
 3. **Type:**
    ```javascript
-   vscode.commands.getCommands().then(commands => console.log(commands.filter(c => c.includes('todo-cli'))))
+   vscode.commands.getCommands().then(commands => console.log(commands.filter(c => c.includes('todo-cli-status'))))
    ```
 
 4. **Should see:**
-   - `todo-cli.configure`
-   - `todo-cli.refresh`
-   - `todo-cli.openList`
+   - `todo-cli-status.configure`
+   - `todo-cli-status.refresh`
+   - `todo-cli-status.openList`
    - etc.
 
 ## Alternative: Use Right-Click Menu
@@ -121,8 +121,8 @@ After installing/updating:
 ### Check Extension Version:
 
 Make sure you have the latest VSIX:
-- File: `todo-cli-status-0.1.0.vsix`
-- Should be ~14KB
+- File: `todo-cli-status-*.vsix`
+ - Rebuild with: `npx --yes @vscode/vsce package --allow-missing-repository`
 
 ### Manual Configuration:
 

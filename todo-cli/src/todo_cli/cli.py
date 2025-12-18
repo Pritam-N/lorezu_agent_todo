@@ -79,6 +79,83 @@ def _print_rich_help(parser: argparse.ArgumentParser, subcommand: str = None) ->
     """Print help using Rich formatting"""
     console.print()
 
+    def _style_epilog_block(epilog: str) -> Text:
+        """
+        Best-effort styling for epilog/example blocks.
+
+        - Commands: bold cyan
+        - Headings (lines ending with ':'): bold magenta
+        - Comments (# ...): dim
+        - Keybind rows (X : ...): highlight key in yellow
+        """
+        out = Text()
+        s = (epilog or "").strip("\n")
+        if not s:
+            return out
+
+        for line in s.splitlines():
+            raw = line.rstrip("\n")
+            if not raw.strip():
+                out.append("\n")
+                continue
+
+            stripped = raw.lstrip()
+            indent = raw[: len(raw) - len(stripped)]
+
+            # Headings like "Examples:" / "Interactive Picker Keys:" / "Backups:"
+            if stripped.endswith(":") and not stripped.startswith(
+                ("todo ", "TODO_DB=")
+            ):
+                out.append(indent, style="dim")
+                out.append(stripped, style="bold bright_magenta")
+                out.append("\n")
+                continue
+
+            # Comment-only lines
+            if stripped.startswith("#"):
+                out.append(raw, style="dim")
+                out.append("\n")
+                continue
+
+            # Command lines (optionally with trailing inline comment)
+            is_cmd = stripped.startswith("todo ") or stripped.startswith("TODO_DB=")
+            if is_cmd:
+                cmd_part = stripped
+                comment_part = ""
+                # Split "cmd   # comment" (keep spacing before #)
+                if "#" in stripped:
+                    before, after = stripped.split("#", 1)
+                    if before.strip().startswith(("todo ", "TODO_DB=")):
+                        cmd_part = before.rstrip()
+                        comment_part = "# " + after.strip()
+
+                out.append(indent, style="dim")
+                out.append(cmd_part, style="bold cyan")
+                if comment_part:
+                    out.append("  ", style="dim")
+                    out.append(comment_part, style="dim")
+                out.append("\n")
+                continue
+
+            # Keybind lines like "↑ / ↓ : move"
+            if ":" in stripped and any(
+                stripped.startswith(prefix)
+                for prefix in ("↑", "↓", "Space", "Enter", "Esc", "Tab")
+            ):
+                key, rest = stripped.split(":", 1)
+                out.append(indent, style="dim")
+                out.append(key.strip(), style="bold yellow")
+                out.append(":", style="dim")
+                out.append(rest, style="white")
+                out.append("\n")
+                continue
+
+            # Default
+            out.append(raw, style="white")
+            out.append("\n")
+
+        return out
+
     # Title
     title = f"[bold bright_magenta]📋 todo-cli[/bold bright_magenta]"
     if subcommand:
@@ -230,12 +307,41 @@ def _print_rich_help(parser: argparse.ArgumentParser, subcommand: str = None) ->
             console.print(table)
             console.print()
 
+        # Dedicated DB initialization / setup section (separate from Examples)
+        setup = """
+Initialize & DB Setup:
+  todo init                           # create config + DB (if missing)
+  todo init --dir ~/Documents/todo-cli --force
+  todo init --db-path ~/Documents/todo-cli/todos.json --force
+
+Temporary override (no config change):
+  todo --db ./todos.json ls
+  TODO_DB=./todos.json todo ls
+
+Verify which DB is in use:
+  todo config
+  todo path
+
+Precedence:
+  --db > TODO_DB env > config > default
+        """.strip(
+            "\n"
+        )
+        console.print(
+            Panel(
+                _style_epilog_block(setup),
+                title="[bold]Initialize & DB Setup[/bold]",
+                border_style="bright_blue",
+            )
+        )
+        console.print()
+
     # Epilog/Examples
     if parser.epilog:
         console.print(
             Panel(
-                parser.epilog.strip(),
-                title="[bold]Examples[/bold]",
+                _style_epilog_block(parser.epilog),
+                title="[bold]Examples & Tips[/bold]",
                 border_style="cyan",
             )
         )
@@ -282,14 +388,21 @@ def find_task(tasks: List[Task], tid: int) -> Task:
 
 
 def cmd_init(args, _db_path: Path) -> None:
+    cfg_before = load_config()
     cfg_p, db_p = init_config(
         db=args.db_path or None, dir_=args.dir or None, force=args.force
     )
+    note = ""
+    if cfg_before.db_path and not args.force and not (args.db_path or args.dir):
+        note = "\n[dim]Note: config already had a DB path; kept existing. Use --force to overwrite.[/dim]"
+    elif cfg_before.db_path and not args.force and (args.db_path or args.dir):
+        note = "\n[dim]Note: config already had a DB path; not overwriting without --force.[/dim]"
     console.print(
         Panel.fit(
             f"[bold green]✨ Initialized todo-cli[/bold green]\n\n"
             f"[cyan]Config:[/cyan] {cfg_p}\n"
-            f"[cyan]DB:[/cyan]     {db_p}\n\n"
+            f"[cyan]DB:[/cyan]     {db_p}\n"
+            f"{note}\n\n"
             f'Next: try [bold]todo add "my task"[/bold] and [bold]todo ls[/bold]',
             title="[bold magenta]📋 todo init[/bold magenta]",
             border_style="green",
@@ -624,8 +737,8 @@ def cmd_add(args, db_path: Path) -> None:
 def cmd_qa(args, db_path: Path) -> None:
     """Quick add: just text, no flags."""
     # Normalize to cmd_add signature
-    args.p = ""
-    args.due = ""
+    args.p = "med"
+    args.due = (dt.date.today() + dt.timedelta(days=1)).isoformat()
     args.tag = []
     cmd_add(args, db_path)
 
@@ -799,6 +912,7 @@ def cmd_rm(args, db_path: Path) -> None:
     with FileLock(db_path.with_suffix(".lock")):
         next_id, tasks = load_tasks(db_path)
         before = len(tasks)
+        removed = [t for t in tasks if t.id == args.id]
         tasks = [t for t in tasks if t.id != args.id]
         if len(tasks) == before:
             console.print()
@@ -812,10 +926,16 @@ def cmd_rm(args, db_path: Path) -> None:
             )
             console.print()
             raise SystemExit(1)
+        # Archive removed task(s) so deletes are recoverable
+        archive_path = archive_path_for_db(db_path)
+        with FileLock(archive_path.with_suffix(".lock")):
+            append_tasks_to_archive(archive_path, removed)
         save_tasks(db_path, next_id, tasks)
     msg = Text()
     msg.append("🗑️  Removed ", style="bold red")
     msg.append(f"#{args.id}", style="bold white")
+    msg.append(" (archived) → ", style="dim")
+    msg.append(str(archive_path_for_db(db_path)), style="bold white")
     console.print(msg)
 
 
@@ -903,7 +1023,7 @@ def cmd_tag(args, db_path: Path) -> None:
 
 
 def _archive_done_tasks(db_path: Path) -> tuple[int, Path]:
-    """Move done tasks out of main DB into archive.json (same folder)."""
+    """Move done tasks out of main DB into todos-archieved.json (same folder)."""
     archive_path = archive_path_for_db(db_path)
     with FileLock(db_path.with_suffix(".lock")):
         next_id, tasks = load_tasks(db_path)
@@ -973,20 +1093,39 @@ def cmd_path(args, db_path: Path) -> None:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="todo",
-        description="A tiny local TODO CLI with arrow-key interactive selection and rich table view.",
+        description="A local TODO CLI with rich tables, interactive picker, stats, backups, and safe archiving.",
         epilog="""
 Examples:
   # Quick start
   todo add "Fix Celery retries" --p high --due 2025-12-20 --tag backend --tag infra
   todo add "Refactor auth middleware" --p med --tag security
   todo ls --pending --sort priority
-  todo pick              # interactive arrow-key selection; marks selected as done
-  todo done 1
+  todo done              # no args opens picker (marks selected as done)
   todo ls --all
+
+  # Fast capture
+  todo qa "Review PR"
+  todo today "Pay invoice"     # due=today
+
+  # Stats (pretty + JSON)
+  todo stats
+  todo stats --json
+
+  # Safe cleanup (archive-first)
+  todo clear-done              # moves done tasks to todos-archieved.json
+  todo clear-done --force      # permanent delete (dangerous)
+  todo archive done
+
+  # Health / recovery
+  todo doctor
+  todo doctor --fix --restore  # restore from rotating backups if JSON is invalid
 
   # Storage override
   todo --db /path/to/todos.json ls
   TODO_DB=/path/to/todos.json todo ls
+
+  # Shell completion
+  todo completion zsh > _todo
 
 Interactive Picker Keys:
   ↑ / ↓ : move
@@ -994,7 +1133,7 @@ Interactive Picker Keys:
   Enter : confirm
   Esc   : cancel
 
-For more information, see: https://github.com/yourusername/todo-cli
+For more information, see: README.md, PATH_RESOLUTION.md, and todo-cli/TROUBLESHOOTING.md
         """,
         formatter_class=RichHelpFormatter,
         add_help=False,  # We'll handle help manually
@@ -1195,11 +1334,14 @@ Examples:
   todo ls --tag backend      # Filter by tag
   todo ls --search "auth"    # Search in task text
   todo ls --sort priority    # Sort by priority
-  todo ls --sort due         # Sort by due date
+  todo ls --sort due         # Sort by due date (overdue first)
   todo ls --sort created     # Sort by creation date (default)
   todo ls --plain            # Plain text output (no table)
 
 Sort options: created, due, priority
+
+Due badges:
+  OVERDUE, TODAY, IN Nd (plus relative coloring in the table)
         """,
         formatter_class=RichHelpFormatter,
     )
@@ -1238,7 +1380,7 @@ Sort options: created, due, priority
     sp = sub.add_parser(
         "stats",
         help="Show stats dashboard",
-        description="Show task statistics: total, pending, done, high priority, overdue, due today.",
+        description="Show task statistics: total, pending, done, high priority, overdue, due today, due soon.",
         epilog="""
 Examples:
   todo stats
@@ -1412,10 +1554,10 @@ Use 'todo ls --tag TAG' to filter tasks by tag.
     sp = sub.add_parser(
         "archive",
         help="Archive tasks (move out of main DB)",
-        description="Move tasks from the main DB into archive.json (same folder as your todos DB).",
+        description="Move tasks from the main DB into todos-archieved.json (same folder as your todos DB).",
         epilog="""
 Examples:
-  todo archive done          # Move all done tasks into archive.json
+  todo archive done          # Move all done tasks into todos-archieved.json
         """,
         formatter_class=RichHelpFormatter,
     )
@@ -1432,10 +1574,10 @@ Examples:
     sp = sub.add_parser(
         "clear-done",
         help="Clear completed tasks (archives by default)",
-        description="Remove done tasks from the active list. By default, tasks are moved to archive.json (safer).",
+        description="Remove done tasks from the active list. By default, tasks are moved to todos-archieved.json (safer).",
         epilog="""
 Examples:
-  todo clear-done            # Move all completed tasks to archive.json
+  todo clear-done            # Move all completed tasks to todos-archieved.json
   todo clear-done --force    # Permanently delete done tasks (dangerous)
         """,
         formatter_class=RichHelpFormatter,
