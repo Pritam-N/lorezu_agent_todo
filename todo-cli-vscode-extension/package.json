@@ -1,8 +1,13 @@
 {
   "name": "todo-cli-status",
   "displayName": "Todo CLI Status",
-  "description": "Display todo-cli statistics in the VSCode status bar",
-  "version": "0.1.0",
+  "description": "Display todo-cli statistics in the VSCode status bar. Automatically creates default database on first use.",
+  "version": "0.1.1",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Pritam-N/lorezu_agent_todo.git"
+  },
   "engines": {
     "vscode": "^1.74.0"
   },
@@ -44,6 +49,12 @@
         "title": "Todo CLI: Open Settings",
         "category": "Todo CLI",
         "icon": "$(settings)"
+      },
+      {
+        "command": "todo-cli.initializeDatabase",
+        "title": "Todo CLI: Initialize Database",
+        "category": "Todo CLI",
+        "icon": "$(file-add)"
       }
     ],
     "menus": {

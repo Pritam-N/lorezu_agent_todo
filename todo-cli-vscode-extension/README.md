@@ -11,7 +11,9 @@ A VSCode extension that displays your todo-cli statistics in the status bar.
   - Yellow background for tasks due today or high priority
   - Green background when all tasks are done
 - 🖱️ **Interactive**: Click the status bar item to view and interact with your tasks
-- ⚙️ **Configurable**: Set custom database path and refresh interval
+- ⚙️ **Configurable**: Set custom database path (workspace or global) and refresh interval
+- ✨ **Auto-initialization**: Automatically creates default database file on first use
+- 📁 **Workspace Support**: Per-project database paths via workspace settings
 
 ## Installation
 
@@ -68,16 +70,31 @@ The extension uses the same path resolution as the todo-cli:
 - `Todo CLI: Open Todo List` - Open quick pick with pending tasks
 - `Todo CLI: Configure Database Path` - Set workspace or global database path
 - `Todo CLI: Show Current Database Path` - Display current path and configuration
+- `Todo CLI: Initialize Database` - Create/reset the database file
 - `Todo CLI: Open Settings` - Open extension settings
 
 **Right-click the status bar item for quick access to all commands.**
 
 ## Usage
 
+### First Time Setup
+
+1. **Install the extension** - The extension will automatically create a default database file on first activation
+2. **Location**: Default database is created at `~/Documents/todo-cli/todos.json` (or `~/.todo-cli/todos.json`)
+3. **Customize**: Right-click status bar → "Configure Database Path" to change location
+
+### Daily Usage
+
 1. The status bar will automatically show your todo statistics
 2. Click the status bar item to see pending tasks
 3. Right-click for context menu options
 4. Use the command palette (`Cmd+Shift+P` / `Ctrl+Shift+P`) to access commands
+
+### Initialize Database Manually
+
+If you need to create/reset the database:
+- Command Palette → `Todo CLI: Initialize Database`
+- Or right-click status bar → "Initialize Database"
 
 ## Status Bar Format
 

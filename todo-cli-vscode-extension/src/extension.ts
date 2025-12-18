@@ -62,6 +62,11 @@ class TodoStatusBar {
         });
         context.subscriptions.push(openSettingsCommand);
 
+        const initializeCommand = vscode.commands.registerCommand('todo-cli.initializeDatabase', () => {
+            this.initializeDatabase();
+        });
+        context.subscriptions.push(initializeCommand);
+
         // Watch for configuration changes (workspace and global)
         context.subscriptions.push(
             vscode.workspace.onDidChangeConfiguration(e => {
@@ -93,7 +98,7 @@ class TodoStatusBar {
         }, 500);
     }
 
-    private resolveDbPath(): string {
+    public resolveDbPath(): string {
         // 1. Check VSCode config (workspace first, then global)
         const workspaceConfig = vscode.workspace.getConfiguration('todo-cli').get<string>('dbPath', '');
         const globalConfig = vscode.workspace.getConfiguration('todo-cli', null).get<string>('dbPath', '');
@@ -213,6 +218,33 @@ class TodoStatusBar {
         return path.join(os.homedir(), '.todo-cli', 'todos.json');
     }
 
+    public initializeDefaultDatabase(dbPath: string): boolean {
+        try {
+            const parentDir = path.dirname(dbPath);
+            
+            // Create parent directory if it doesn't exist
+            if (!fs.existsSync(parentDir)) {
+                fs.mkdirSync(parentDir, { recursive: true });
+                console.log(`[Todo CLI] Created directory: ${parentDir}`);
+            }
+
+            // Create default database structure
+            const defaultDb: TodoDatabase = {
+                version: 1,
+                next_id: 1,
+                tasks: []
+            };
+
+            // Write default database file
+            fs.writeFileSync(dbPath, JSON.stringify(defaultDb, null, 2), 'utf8');
+            console.log(`[Todo CLI] Created default database at: ${dbPath}`);
+            return true;
+        } catch (error) {
+            console.error('[Todo CLI] Error creating default database:', error);
+            return false;
+        }
+    }
+
     private loadTasks(): TodoDatabase | null {
         const dbPath = this.resolveDbPath();
         console.log(`[Todo CLI] Resolved DB path: ${dbPath}`);
@@ -220,6 +252,18 @@ class TodoStatusBar {
         
         if (!fs.existsSync(dbPath)) {
             console.log(`[Todo CLI] Database file not found at: ${dbPath}`);
+            
+            // Try to create default database
+            const created = this.initializeDefaultDatabase(dbPath);
+            if (created) {
+                // Return the newly created database
+                return {
+                    version: 1,
+                    next_id: 1,
+                    tasks: []
+                };
+            }
+            
             // Check if parent directory exists
             const parentDir = path.dirname(dbPath);
             console.log(`[Todo CLI] Parent directory exists: ${fs.existsSync(parentDir)}`);
@@ -339,6 +383,41 @@ class TodoStatusBar {
         this.refreshTimer = setInterval(() => {
             this.updateStatus();
         }, interval);
+    }
+
+    private async initializeDatabase(): Promise<void> {
+        const dbPath = this.resolveDbPath();
+        
+        if (fs.existsSync(dbPath)) {
+            const action = await vscode.window.showWarningMessage(
+                `Database already exists at:\n${dbPath}\n\nDo you want to overwrite it?`,
+                { modal: true },
+                'Overwrite',
+                'Cancel'
+            );
+            
+            if (action !== 'Overwrite') {
+                return;
+            }
+        }
+
+        const created = this.initializeDefaultDatabase(dbPath);
+        if (created) {
+            this.updateStatus();
+            vscode.window.showInformationMessage(
+                `✅ Database initialized at:\n${dbPath}`,
+                'Open File', 'Change Path'
+            ).then(selection => {
+                if (selection === 'Open File') {
+                    const fileUri = vscode.Uri.file(dbPath);
+                    vscode.commands.executeCommand('vscode.open', fileUri);
+                } else if (selection === 'Change Path') {
+                    this.configureDatabase();
+                }
+            });
+        } else {
+            vscode.window.showErrorMessage(`Failed to create database at:\n${dbPath}`);
+        }
     }
 
     private async openTodoList(): Promise<void> {
@@ -723,6 +802,33 @@ export function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push({
             dispose: () => todoStatusBar.dispose()
         });
+        
+        // Check if we should create default database on first activation
+        const isFirstActivation = context.globalState.get<boolean>('todo-cli.firstActivation', true);
+        if (isFirstActivation) {
+            // Try to create default database if it doesn't exist
+            const dbPath = todoStatusBar.resolveDbPath();
+            if (!fs.existsSync(dbPath)) {
+                const created = todoStatusBar.initializeDefaultDatabase(dbPath);
+                if (created) {
+                    // Show notification after a short delay to let status bar initialize
+                    setTimeout(() => {
+                        vscode.window.showInformationMessage(
+                            `✅ Todo CLI: Created default database at ${dbPath}`,
+                            'Change Path', 'Open File'
+                        ).then(selection => {
+                            if (selection === 'Change Path') {
+                                vscode.commands.executeCommand('todo-cli.configure');
+                            } else if (selection === 'Open File') {
+                                const fileUri = vscode.Uri.file(dbPath);
+                                vscode.commands.executeCommand('vscode.open', fileUri);
+                            }
+                        });
+                    }, 1000);
+                }
+            }
+            context.globalState.update('todo-cli.firstActivation', false);
+        }
         
         // Extension activated successfully
     } catch (error) {
