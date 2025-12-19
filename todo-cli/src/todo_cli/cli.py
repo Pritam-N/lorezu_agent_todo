@@ -813,6 +813,7 @@ def cmd_completion(args, _db_path: Path) -> None:
         "clear-done",
         "path",
         "completion",
+        "bug",
     ]
     cmd_list = " ".join(cmds)
 
@@ -1090,6 +1091,247 @@ def cmd_path(args, db_path: Path) -> None:
     console.print(msg)
 
 
+# ============================================================================
+# Bug Tracking Commands
+# ============================================================================
+
+
+def cmd_bug_add(args, db_path: Path) -> None:
+    """Add a new bug report."""
+    with FileLock(db_path.with_suffix(".lock")):
+        next_id, tasks = load_tasks(db_path)
+        # Convert literal \n to actual newlines in steps
+        steps = (args.steps or "").replace("\\n", "\n") if args.steps else ""
+        t = Task(
+            id=next_id,
+            text=args.text.strip(),
+            done=False,
+            created_at=now_iso(),
+            priority=(args.p or "").lower(),
+            due=parse_date(args.due) if args.due else "",
+            tags=(args.tag or []) + ["bug"],  # Auto-add #bug tag
+            bug_status=args.status or "open",
+            bug_assignee=args.assignee or "",
+            bug_severity=(args.severity or "").lower(),
+            bug_steps=steps,
+            bug_environment=args.env or "",
+        )
+        tasks.append(t)
+        save_tasks(db_path, next_id + 1, tasks)
+    msg = Text()
+    msg.append("🐛 Bug #", style="bold red")
+    msg.append(f"{t.id}", style="bold white")
+    msg.append(f": {t.text}", style="white")
+    if t.bug_severity:
+        msg.append(f" [{t.bug_severity.upper()}]", style="bold red")
+    console.print(msg)
+
+
+def cmd_bug_list(args, db_path: Path) -> None:
+    """List all bugs."""
+    _, tasks = load_tasks(db_path)
+    bugs = [t for t in tasks if t.is_bug()]
+
+    if args.status:
+        bugs = [b for b in bugs if (b.bug_status or "").lower() == args.status.lower()]
+    if args.severity:
+        bugs = [
+            b for b in bugs if (b.bug_severity or "").lower() == args.severity.lower()
+        ]
+    if args.assignee:
+        bugs = [
+            b for b in bugs if (b.bug_assignee or "").lower() == args.assignee.lower()
+        ]
+    if args.env:
+        bugs = [
+            b for b in bugs if (b.bug_environment or "").lower() == args.env.lower()
+        ]
+
+    if not bugs:
+        console.print("[dim]🐛 No bugs found[/dim]")
+        return
+
+    # Render bugs in a table with bug-specific columns
+    from .render import render_bugs_table
+
+    render_bugs_table(bugs, title="Bugs")
+
+
+def cmd_bug_show(args, db_path: Path) -> None:
+    """Show detailed bug information."""
+    _, tasks = load_tasks(db_path)
+    t = find_task(tasks, args.id)
+
+    if not t.is_bug():
+        console.print()
+        console.print(
+            Panel(
+                f"[bold yellow]⚠️  Task #{args.id} is not a bug[/bold yellow]\n\n"
+                f"[white]Use [bold cyan]todo bug add[/bold cyan] to create bugs.[/white]",
+                border_style="yellow",
+            )
+        )
+        console.print()
+        return
+
+    # Render detailed bug panel
+    from .render import render_bug_detail
+
+    render_bug_detail(t)
+
+
+def cmd_bug_status(args, db_path: Path) -> None:
+    """Set bug status."""
+    valid_statuses = ["open", "in-progress", "fixed", "closed"]
+    status = args.status.lower()
+    if status not in valid_statuses:
+        console.print()
+        console.print(
+            Panel(
+                f"[bold red]❌ Invalid bug status[/bold red]\n\n"
+                f"[white]Status: [bold yellow]{args.status}[/bold yellow]\n"
+                f"Must be one of: [bold cyan]{', '.join(valid_statuses)}[/bold cyan][/white]",
+                border_style="red",
+            )
+        )
+        console.print()
+        raise SystemExit(1)
+
+    with FileLock(db_path.with_suffix(".lock")):
+        next_id, tasks = load_tasks(db_path)
+        t = find_task(tasks, args.id)
+        if not t.is_bug():
+            # Convert to bug if not already
+            if not t.tags:
+                t.tags = []
+            if "bug" not in [tag.lower() for tag in t.tags]:
+                t.tags.append("bug")
+        t.bug_status = status
+        save_tasks(db_path, next_id, tasks)
+
+    msg = Text()
+    msg.append("🐛 Bug status set for #", style="bold cyan")
+    msg.append(f"{args.id}", style="bold white")
+    msg.append(f" -> ", style="dim")
+    status_colors = {
+        "open": "yellow",
+        "in-progress": "blue",
+        "fixed": "green",
+        "closed": "dim",
+    }
+    msg.append(status.upper(), style=f"bold {status_colors.get(status, 'white')}")
+    console.print(msg)
+
+
+def cmd_bug_assign(args, db_path: Path) -> None:
+    """Assign bug to someone."""
+    with FileLock(db_path.with_suffix(".lock")):
+        next_id, tasks = load_tasks(db_path)
+        t = find_task(tasks, args.id)
+        if not t.is_bug():
+            # Convert to bug if not already
+            if not t.tags:
+                t.tags = []
+            if "bug" not in [tag.lower() for tag in t.tags]:
+                t.tags.append("bug")
+        t.bug_assignee = args.assignee.strip()
+        save_tasks(db_path, next_id, tasks)
+
+    msg = Text()
+    msg.append("👤 Assigned bug #", style="bold cyan")
+    msg.append(f"{args.id}", style="bold white")
+    msg.append(f" to ", style="dim")
+    msg.append(args.assignee, style="bold white")
+    console.print(msg)
+
+
+def cmd_bug_severity(args, db_path: Path) -> None:
+    """Set bug severity."""
+    valid_severities = ["critical", "high", "medium", "low"]
+    severity = args.severity.lower()
+    if severity not in valid_severities:
+        console.print()
+        console.print(
+            Panel(
+                f"[bold red]❌ Invalid bug severity[/bold red]\n\n"
+                f"[white]Severity: [bold yellow]{args.severity}[/bold yellow]\n"
+                f"Must be one of: [bold cyan]{', '.join(valid_severities)}[/bold cyan][/white]",
+                border_style="red",
+            )
+        )
+        console.print()
+        raise SystemExit(1)
+
+    with FileLock(db_path.with_suffix(".lock")):
+        next_id, tasks = load_tasks(db_path)
+        t = find_task(tasks, args.id)
+        if not t.is_bug():
+            # Convert to bug if not already
+            if not t.tags:
+                t.tags = []
+            if "bug" not in [tag.lower() for tag in t.tags]:
+                t.tags.append("bug")
+        t.bug_severity = severity
+        save_tasks(db_path, next_id, tasks)
+
+    msg = Text()
+    msg.append("⚡ Severity set for bug #", style="bold cyan")
+    msg.append(f"{args.id}", style="bold white")
+    msg.append(f" -> ", style="dim")
+    severity_colors = {
+        "critical": "bold red",
+        "high": "bold yellow",
+        "medium": "bold blue",
+        "low": "bold cyan",
+    }
+    msg.append(severity.upper(), style=severity_colors.get(severity, "white"))
+    console.print(msg)
+
+
+def cmd_bug_steps(args, db_path: Path) -> None:
+    """Set steps to reproduce."""
+    with FileLock(db_path.with_suffix(".lock")):
+        next_id, tasks = load_tasks(db_path)
+        t = find_task(tasks, args.id)
+        if not t.is_bug():
+            # Convert to bug if not already
+            if not t.tags:
+                t.tags = []
+            if "bug" not in [tag.lower() for tag in t.tags]:
+                t.tags.append("bug")
+        # Convert literal \n to actual newlines
+        steps = args.steps.strip().replace("\\n", "\n")
+        t.bug_steps = steps
+        save_tasks(db_path, next_id, tasks)
+
+    msg = Text()
+    msg.append("📝 Steps to reproduce set for bug #", style="bold cyan")
+    msg.append(f"{args.id}", style="bold white")
+    console.print(msg)
+
+
+def cmd_bug_env(args, db_path: Path) -> None:
+    """Set bug environment."""
+    with FileLock(db_path.with_suffix(".lock")):
+        next_id, tasks = load_tasks(db_path)
+        t = find_task(tasks, args.id)
+        if not t.is_bug():
+            # Convert to bug if not already
+            if not t.tags:
+                t.tags = []
+            if "bug" not in [tag.lower() for tag in t.tags]:
+                t.tags.append("bug")
+        t.bug_environment = args.env.strip()
+        save_tasks(db_path, next_id, tasks)
+
+    msg = Text()
+    msg.append("🌍 Environment set for bug #", style="bold cyan")
+    msg.append(f"{args.id}", style="bold white")
+    msg.append(f" -> ", style="dim")
+    msg.append(args.env, style="bold white")
+    console.print(msg)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="todo",
@@ -1119,6 +1361,13 @@ Examples:
   # Health / recovery
   todo doctor
   todo doctor --fix --restore  # restore from rotating backups if JSON is invalid
+
+  # Bug tracking (QA-friendly)
+  todo bug add "Login button not working" --severity critical --env prod --assignee john
+  todo bug list --status open
+  todo bug status 1 in-progress
+  todo bug assign 1 jane
+  todo bug show 1
 
   # Storage override
   todo --db /path/to/todos.json ls
@@ -1603,6 +1852,264 @@ Useful for scripts or to verify which database file is being used.
     )
     sp.set_defaults(fn=cmd_path)
 
+    # Bug tracking subcommands
+    bug_sub = sub.add_parser(
+        "bug",
+        help="Bug tracking commands",
+        description="Track bugs with status, severity, assignee, steps to reproduce, and environment.",
+        epilog="""
+Examples:
+  # Create bugs
+  todo bug add "Login button not working" --severity critical --env prod
+  todo bug add "API returns 500" --severity high --assignee john --steps "1. Open app\\n2. Click login"
+
+  # List and filter bugs
+  todo bug list
+  todo bug list --status open --severity critical
+  todo bug list --assignee john --env prod
+
+  # Manage bugs
+  todo bug show 1                    # View detailed bug info
+  todo bug status 1 in-progress      # Update status
+  todo bug assign 1 jane             # Assign to someone
+  todo bug severity 1 high           # Set severity
+  todo bug steps 1 "1. Step\\n2. Step"  # Add reproduction steps
+  todo bug env 1 staging             # Set environment
+
+Bugs are regular tasks with additional fields and automatically tagged with #bug.
+Use 'todo ls --tag bug' to see bugs in regular task lists.
+        """,
+        formatter_class=RichHelpFormatter,
+    )
+    bug_cmds = bug_sub.add_subparsers(
+        dest="bug_cmd", required=True, title="bug commands", metavar="COMMAND"
+    )
+
+    sp = bug_cmds.add_parser(
+        "add",
+        help="Add a new bug report",
+        description="Create a new bug report with optional fields.",
+        epilog="""
+Examples:
+  # Basic bug
+  todo bug add "Login button not working"
+
+  # Bug with severity and environment
+  todo bug add "API returns 500" --severity critical --env prod --assignee john
+
+  # Complete bug with all fields
+  todo bug add "UI glitch" --severity medium --status in-progress \\
+    --steps "1. Open app\\n2. Click button\\n3. See error" \\
+    --assignee jane --env staging --p high --due 2025-12-25
+
+  # Quick bug for QA
+  todo bug add "Payment fails on Safari" --severity high --env staging
+        """,
+        formatter_class=RichHelpFormatter,
+    )
+    sp.add_argument("text", type=str, help="Bug description")
+    sp.add_argument(
+        "--severity",
+        type=str,
+        choices=["critical", "high", "medium", "low"],
+        help="Bug severity",
+    )
+    sp.add_argument(
+        "--status",
+        type=str,
+        choices=["open", "in-progress", "fixed", "closed"],
+        default="open",
+        help="Bug status (default: open)",
+    )
+    sp.add_argument("--assignee", type=str, default="", help="Assign bug to someone")
+    sp.add_argument(
+        "--env", type=str, default="", help="Environment (e.g., dev, staging, prod)"
+    )
+    sp.add_argument("--steps", type=str, default="", help="Steps to reproduce")
+    sp.add_argument(
+        "--p",
+        type=str,
+        default="",
+        metavar="PRIORITY",
+        help="Priority: low, med, or high",
+    )
+    sp.add_argument(
+        "--due",
+        type=str,
+        default="",
+        metavar="DATE",
+        help="Due date in YYYY-MM-DD format",
+    )
+    sp.add_argument(
+        "--tag",
+        action="append",
+        default=[],
+        metavar="TAG",
+        help="Add a tag (can be used multiple times)",
+    )
+    sp.set_defaults(fn=cmd_bug_add)
+
+    sp = bug_cmds.add_parser(
+        "list",
+        help="List all bugs",
+        description="List all bugs with filtering options.",
+        epilog="""
+Examples:
+  # List all bugs
+  todo bug list
+
+  # Filter by status
+  todo bug list --status open
+  todo bug list --status in-progress
+  todo bug list --status fixed
+
+  # Filter by severity
+  todo bug list --severity critical
+  todo bug list --severity high
+
+  # Filter by assignee or environment
+  todo bug list --assignee john
+  todo bug list --env prod
+
+  # Combine multiple filters (all must match)
+  todo bug list --status open --severity critical --env prod
+  todo bug list --status open --assignee john
+        """,
+        formatter_class=RichHelpFormatter,
+    )
+    sp.add_argument(
+        "--status",
+        type=str,
+        choices=["open", "in-progress", "fixed", "closed"],
+        help="Filter by status",
+    )
+    sp.add_argument(
+        "--severity",
+        type=str,
+        choices=["critical", "high", "medium", "low"],
+        help="Filter by severity",
+    )
+    sp.add_argument("--assignee", type=str, help="Filter by assignee")
+    sp.add_argument("--env", type=str, help="Filter by environment")
+    sp.set_defaults(fn=cmd_bug_list)
+
+    sp = bug_cmds.add_parser(
+        "show",
+        help="Show detailed bug information",
+        description="Display detailed information about a specific bug.",
+        epilog="""
+Examples:
+  # Show detailed bug information
+  todo bug show 1
+
+Displays all bug fields including status, severity, assignee, environment,
+steps to reproduce, priority, due date, tags, and timestamps.
+        """,
+        formatter_class=RichHelpFormatter,
+    )
+    sp.add_argument("id", type=int, metavar="ID", help="Bug ID")
+    sp.set_defaults(fn=cmd_bug_show)
+
+    sp = bug_cmds.add_parser(
+        "status",
+        help="Set bug status",
+        description="Update the status of a bug.",
+        epilog="""
+Examples:
+  todo bug status 1 open
+  todo bug status 1 in-progress
+  todo bug status 1 fixed
+  todo bug status 1 closed
+        """,
+        formatter_class=RichHelpFormatter,
+    )
+    sp.add_argument("id", type=int, metavar="ID", help="Bug ID")
+    sp.add_argument(
+        "status",
+        type=str,
+        choices=["open", "in-progress", "fixed", "closed"],
+        help="New status",
+    )
+    sp.set_defaults(fn=cmd_bug_status)
+
+    sp = bug_cmds.add_parser(
+        "assign",
+        help="Assign bug to someone",
+        description="Assign a bug to a team member.",
+        epilog="""
+Examples:
+  # Assign bug to someone
+  todo bug assign 1 john
+  todo bug assign 2 "Jane Doe"
+  todo bug assign 3 backend-team
+
+The assignee can be a name, username, or team identifier.
+        """,
+        formatter_class=RichHelpFormatter,
+    )
+    sp.add_argument("id", type=int, metavar="ID", help="Bug ID")
+    sp.add_argument("assignee", type=str, help="Assignee name")
+    sp.set_defaults(fn=cmd_bug_assign)
+
+    sp = bug_cmds.add_parser(
+        "severity",
+        help="Set bug severity",
+        description="Set the severity level of a bug.",
+        epilog="""
+Examples:
+  todo bug severity 1 critical
+  todo bug severity 1 high
+  todo bug severity 1 medium
+  todo bug severity 1 low
+        """,
+        formatter_class=RichHelpFormatter,
+    )
+    sp.add_argument("id", type=int, metavar="ID", help="Bug ID")
+    sp.add_argument(
+        "severity",
+        type=str,
+        choices=["critical", "high", "medium", "low"],
+        help="Severity level",
+    )
+    sp.set_defaults(fn=cmd_bug_severity)
+
+    sp = bug_cmds.add_parser(
+        "steps",
+        help="Set steps to reproduce",
+        description="Add or update steps to reproduce a bug.",
+        epilog="""
+Examples:
+  # Add steps to reproduce (use \\n for line breaks)
+  todo bug steps 1 "1. Open the app\\n2. Click login\\n3. See error"
+
+  # Multi-line steps example
+  todo bug steps 1 "1. Navigate to checkout page\\n2. Select payment method\\n3. Enter card details\\n4. Click pay button\\n5. Observe: Payment fails with error message"
+
+Use \\n to create line breaks in the steps. The steps will be displayed
+formatted when viewing the bug with 'todo bug show'.
+        """,
+        formatter_class=RichHelpFormatter,
+    )
+    sp.add_argument("id", type=int, metavar="ID", help="Bug ID")
+    sp.add_argument("steps", type=str, help="Steps to reproduce")
+    sp.set_defaults(fn=cmd_bug_steps)
+
+    sp = bug_cmds.add_parser(
+        "env",
+        help="Set bug environment",
+        description="Set the environment where the bug occurs.",
+        epilog="""
+Examples:
+  todo bug env 1 prod
+  todo bug env 1 staging
+  todo bug env 1 dev
+        """,
+        formatter_class=RichHelpFormatter,
+    )
+    sp.add_argument("id", type=int, metavar="ID", help="Bug ID")
+    sp.add_argument("env", type=str, help="Environment name")
+    sp.set_defaults(fn=cmd_bug_env)
+
     return p
 
 
@@ -1664,5 +2171,19 @@ def run(argv: List[str]) -> int:
         )
         console.print()
         raise SystemExit(1)
-    args.fn(args, db_path)
+
+    # Call the command function (works for both top-level and nested bug commands)
+    if hasattr(args, "fn"):
+        args.fn(args, db_path)
+    else:
+        console.print()
+        console.print(
+            Panel(
+                "[bold red]❌ Command not found[/bold red]\n\n"
+                "[white]Use [bold cyan]todo --help[/bold cyan] for available commands.[/white]",
+                border_style="red",
+            )
+        )
+        console.print()
+        raise SystemExit(1)
     return 0

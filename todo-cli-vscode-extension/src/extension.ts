@@ -12,6 +12,12 @@ interface Task {
     priority: string;
     due: string;
     tags: string[];
+    // Bug tracking fields (optional)
+    bug_status?: string;
+    bug_assignee?: string;
+    bug_severity?: string;
+    bug_steps?: string;
+    bug_environment?: string;
 }
 
 interface TodoDatabase {

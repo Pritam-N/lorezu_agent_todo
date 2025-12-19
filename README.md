@@ -33,6 +33,7 @@ A TypeScript extension for VSCode/Cursor that displays todo statistics in the st
 - 📅 **Due Date Management**: Smart date formatting with urgency indicators (overdue, today, soon)
 - 🎯 **Priority Levels**: High, medium, and low priority with color coding
 - 🔍 **Search & Filter**: Filter by status, tags, or search text
+- 🐛 **Bug Tracking**: Dedicated bug tracking commands with status, severity, assignee, steps to reproduce, and environment
 - 📝 **Rich Help System**: Comprehensive help with examples for all commands
 - ⚙️ **Flexible Configuration**: Multiple ways to configure database path (CLI args, env vars, config file)
 
@@ -140,6 +141,21 @@ todo due 1 none            # Clear due date
 todo tag 1 add urgent      # Add tag
 todo tag 1 del urgent      # Remove tag
 
+# Bug Tracking (QA-friendly)
+todo bug add "Login button not working" --severity critical --env prod --assignee john
+todo bug add "API returns 500" --severity high --status in-progress --steps "1. Open app\n2. Click login\n3. See error"
+todo bug list                    # List all bugs
+todo bug list --status open      # Filter by status
+todo bug list --severity critical # Filter by severity
+todo bug list --assignee john     # Filter by assignee
+todo bug list --env prod          # Filter by environment
+todo bug show 1                   # Show detailed bug info
+todo bug status 1 in-progress     # Update bug status
+todo bug assign 1 jane            # Assign bug to someone
+todo bug severity 1 high          # Set bug severity
+todo bug steps 1 "1. Open app\n2. Click button"  # Add steps to reproduce
+todo bug env 1 staging            # Set environment
+
 # Maintenance
 todo clear-done            # Archive completed tasks to todos-archieved.json (safer)
 todo clear-done --force    # Permanently delete completed tasks (dangerous)
@@ -176,6 +192,226 @@ todo path                  # Show database path
 
 ---
 
+## 🐛 Bug Tracking
+
+### Overview
+
+Bug tracking extends the standard todo system with specialized fields for QA teams and developers to track issues systematically. Bugs are regular tasks with additional metadata: status, severity, assignee, steps to reproduce, and environment. All bugs are automatically tagged with `#bug` and can be filtered and managed using dedicated bug commands.
+
+**Key Features:**
+- **Status tracking**: open, in-progress, fixed, closed
+- **Severity levels**: critical, high, medium, low
+- **Assignment**: Track who's working on each bug
+- **Reproduction steps**: Document how to reproduce issues
+- **Environment tracking**: dev, staging, prod, etc.
+- **Integration**: Bugs appear in regular task lists and can use all standard task features (priority, due dates, tags)
+
+### Creating Bugs
+
+Use `todo bug add` to create a new bug report. All fields are optional except the description:
+
+```bash
+# Basic bug report
+todo bug add "Login button not working"
+
+# Complete bug with all fields
+todo bug add "API returns 500 error" \
+  --severity critical \
+  --status open \
+  --assignee john \
+  --env prod \
+  --steps "1. Open app\n2. Click login\n3. See 500 error" \
+  --p high \
+  --due 2025-12-25 \
+  --tag backend
+
+# Quick bug creation for QA
+todo bug add "UI glitch on mobile" --severity high --env staging
+```
+
+**Options:**
+- `--severity`: critical, high, medium, low (default: none)
+- `--status`: open, in-progress, fixed, closed (default: open)
+- `--assignee`: Person responsible for fixing the bug
+- `--env`: Environment where bug occurs (dev, staging, prod, etc.)
+- `--steps`: Steps to reproduce the bug (supports newlines with `\n`)
+- `--p`: Priority level (low, med, high) - separate from severity
+- `--due`: Due date in YYYY-MM-DD format
+- `--tag`: Additional tags (can be used multiple times)
+
+**Note:** Bugs automatically receive the `#bug` tag, so they can be filtered with `todo ls --tag bug`.
+
+### Viewing and Filtering Bugs
+
+List all bugs or filter by specific criteria:
+
+```bash
+# List all bugs
+todo bug list
+
+# Filter by status
+todo bug list --status open
+todo bug list --status in-progress
+todo bug list --status fixed
+
+# Filter by severity
+todo bug list --severity critical
+todo bug list --severity high
+
+# Filter by assignee
+todo bug list --assignee john
+
+# Filter by environment
+todo bug list --env prod
+todo bug list --env staging
+
+# Combine filters (all must match)
+todo bug list --status open --severity critical --env prod
+```
+
+**View detailed bug information:**
+
+```bash
+# Show complete bug details including steps to reproduce
+todo bug show 1
+```
+
+This displays a formatted panel with all bug fields, including:
+- ID, description, status, severity
+- Assignee, environment, priority
+- Due date, tags
+- Steps to reproduce (if set)
+- Creation and completion timestamps
+
+### Managing Bugs
+
+Update bug properties individually as you work on them:
+
+```bash
+# Update bug status
+todo bug status 1 open              # Mark as open
+todo bug status 1 in-progress        # Mark as in progress
+todo bug status 1 fixed              # Mark as fixed
+todo bug status 1 closed             # Mark as closed
+
+# Assign bug to someone
+todo bug assign 1 jane
+todo bug assign 1 "John Doe"
+
+# Set or change severity
+todo bug severity 1 critical
+todo bug severity 1 high
+todo bug severity 1 medium
+todo bug severity 1 low
+
+# Add or update steps to reproduce
+todo bug steps 1 "1. Navigate to login page\n2. Enter credentials\n3. Click submit\n4. Observe error"
+
+# Set environment
+todo bug env 1 prod
+todo bug env 1 staging
+todo bug env 1 dev
+```
+
+**Workflow Example:**
+
+```bash
+# QA finds a bug
+todo bug add "Button not clickable" --severity high --env staging --assignee dev-team
+
+# Developer picks it up
+todo bug assign 1 alice
+todo bug status 1 in-progress
+
+# Developer fixes it
+todo bug status 1 fixed
+todo bug env 1 prod  # Move to prod for verification
+
+# QA verifies fix
+todo bug status 1 closed
+```
+
+### Integration with Regular Tasks
+
+Bugs are fully integrated with the regular task system:
+
+- **Appear in task lists**: Use `todo ls` to see all tasks including bugs
+- **Standard task commands work**: `todo edit`, `todo pri`, `todo due`, `todo tag` all work on bugs
+- **Filter by bug tag**: `todo ls --tag bug` shows only bugs
+- **Archive with tasks**: `todo clear-done` and `todo archive` include bugs
+- **Statistics**: Bugs are included in `todo stats` output
+
+**Example:**
+
+```bash
+# View all tasks (including bugs)
+todo ls --all
+
+# View only bugs using tag filter
+todo ls --tag bug
+
+# Edit bug description like any task
+todo edit 1 "Updated: Login button not working on mobile Safari"
+
+# Set priority and due date
+todo pri 1 high
+todo due 1 2025-12-25
+```
+
+### Best Practices for QA Teams
+
+1. **Consistent Severity Levels**
+   - Use `critical` for production blockers
+   - Use `high` for major functionality issues
+   - Use `medium` for minor issues or edge cases
+   - Use `low` for cosmetic issues
+
+2. **Detailed Steps to Reproduce**
+   - Always include steps when creating bugs
+   - Use numbered steps with `\n` for line breaks
+   - Include expected vs. actual behavior
+
+3. **Environment Tracking**
+   - Always specify the environment where the bug was found
+   - Update environment when moving bugs through environments
+
+4. **Status Workflow**
+   - Start with `open` when creating bugs
+   - Move to `in-progress` when work begins
+   - Mark as `fixed` when code is ready for testing
+   - Mark as `closed` after verification
+
+5. **Assignment**
+   - Assign bugs immediately when creating them
+   - Reassign when priorities change
+
+6. **Regular Cleanup**
+   - Use `todo bug list --status closed` to review closed bugs
+   - Archive old closed bugs with `todo archive done`
+
+**Example QA Workflow:**
+
+```bash
+# 1. Find bug during testing
+todo bug add "Payment fails on Safari" \
+  --severity critical \
+  --env staging \
+  --assignee backend-team \
+  --steps "1. Go to checkout\n2. Select payment method\n3. Click pay\n4. See error: 'Payment failed'"
+
+# 2. Check open critical bugs
+todo bug list --status open --severity critical
+
+# 3. After fix, verify in prod
+todo bug status 5 fixed
+todo bug env 5 prod
+
+# 4. Verify fix and close
+todo bug status 5 closed
+```
+
+---
+
 ## 🎨 UI Features
 
 ### Terminal Output (CLI)
@@ -200,6 +436,19 @@ The CLI displays tasks in a beautiful table format:
 │   5    │ │    3    │ │  2   │ │      1       │ │    2     │
 │ Total  │ │ Pending │ │ Done │ │ High Priority│ │ Overdue  │
 └────────┘ └─────────┘ └──────┘ └──────────────┘ └──────────┘
+```
+
+**Bug Tracking Table:**
+```
+🐛 Bugs
+
+┌────┬──────────────┬──────────┬───────────┬──────────┬──────────┬────────────────────────┐
+│ ID │ Status       │ Severity │ Assignee   │ Env       │ Priority │ Bug Description        │
+├────┼──────────────┼──────────┼───────────┼──────────┼──────────┼────────────────────────┤
+│  1 │ OPEN         │ CRITICAL │ john       │ prod      │ HIGH     │ Login button not work  │
+│  2 │ IN-PROGRESS  │ HIGH     │ jane       │ staging   │ MED      │ API returns 500       │
+│  3 │ FIXED        │ MEDIUM   │ —          │ dev       │ LOW      │ UI glitch             │
+└────┴──────────────┴──────────┴───────────┴──────────┴──────────┴────────────────────────┘
 ```
 
 ### Status Bar (Extension)

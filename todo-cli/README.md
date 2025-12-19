@@ -42,6 +42,30 @@ todo pick
 todo config
 ```
 
+## Bug Tracking
+
+Dedicated commands for QA teams to track bugs with status, severity, assignee, steps to reproduce, and environment:
+
+```bash
+# Create a bug
+todo bug add "Login button not working" --severity critical --env prod --assignee john
+
+# List bugs with filters
+todo bug list --status open
+todo bug list --severity critical
+todo bug list --assignee john
+
+# Manage bugs
+todo bug show 1                  # Show detailed bug info
+todo bug status 1 in-progress     # Update status
+todo bug assign 1 jane            # Assign to someone
+todo bug severity 1 high          # Set severity
+todo bug steps 1 "1. Open app\n2. Click button"  # Add steps
+todo bug env 1 staging            # Set environment
+```
+
+Bugs are regular tasks with additional fields and automatically tagged with `#bug`. See main README.md for complete bug tracking documentation.
+
 ## DB path precedence
 
 1) `--db /path/to/todos.json`
