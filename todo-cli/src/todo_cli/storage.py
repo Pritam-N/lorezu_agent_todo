@@ -150,8 +150,16 @@ class FileLock:
 def load_db(db_path: Path) -> Dict[str, Any]:
     if not db_path.exists():
         return {"version": VERSION, "next_id": 1, "tasks": []}
-    with open(db_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    try:
+        with open(db_path, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+            if not content:
+                # Empty file - return default
+                return {"version": VERSION, "next_id": 1, "tasks": []}
+            data = json.loads(content)
+    except (json.JSONDecodeError, ValueError):
+        # Corrupted JSON - return default
+        return {"version": VERSION, "next_id": 1, "tasks": []}
     data.setdefault("version", VERSION)
     data.setdefault("next_id", 1)
     data.setdefault("tasks", [])

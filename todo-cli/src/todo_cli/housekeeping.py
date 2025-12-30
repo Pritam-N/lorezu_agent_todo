@@ -44,6 +44,7 @@ def init_config(
             if not p.exists():
                 save_db(p, {"version": 1, "next_id": 1, "tasks": []})
             else:
+                # Load validates the file; load_db handles corrupted files gracefully
                 _ = load_db(p)
         ap = archive_path_for_db(p)
         with FileLock(ap.with_suffix(".lock")):
@@ -63,6 +64,7 @@ def init_config(
             if not p.exists():
                 save_db(p, {"version": 1, "next_id": 1, "tasks": []})
             else:
+                # Load validates the file; load_db handles corrupted files gracefully
                 _ = load_db(p)
         ap = archive_path_for_db(p)
         with FileLock(ap.with_suffix(".lock")):
@@ -86,6 +88,7 @@ def init_config(
         if not db_path.exists():
             save_db(db_path, {"version": 1, "next_id": 1, "tasks": []})
         else:
+            # Load validates the file; load_db handles corrupted files gracefully
             _ = load_db(db_path)
 
     # Ensure archive file exists next to the DB (so deletes/archives are recoverable)

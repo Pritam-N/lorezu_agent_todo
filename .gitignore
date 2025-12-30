@@ -206,3 +206,9 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 *.pyc
+**/__pycache__/
+
+# Todo CLI backups and lock files
+*.json.[0-9]
+*.json.lock
+todos-archieved.json

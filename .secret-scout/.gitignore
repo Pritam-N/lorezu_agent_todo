@@ -1,0 +1,8 @@
+# secret-scout local artifacts
+.secret-scout/.cache/
+.secret-scout/cache/
+.secret-scout/tmp/
+
+# Baselines (optional: commit if you want)
+.secret-scout/baseline.json
+.secret-scout/baseline*.json

@@ -1,0 +1,28 @@
+metadata:
+  name: "repo-overrides"
+  version: "1"
+  description: "Repo-specific overrides for secret-scout. Builtin rules always run; this file can override/extend them."
+
+rules:
+  # - id: "structured.dotenv.forbidden-keys"
+  #   type: "structured"
+  #   severity: "high"
+  #   description: "Forbidden dotenv keys"
+  #   structured:
+  #     format: "dotenv"
+  #     forbidden_keys: ["API_KEY", "SECRET", "TOKEN"]
+  #     value_policy: "non_empty"
+  # Example: downgrade env-file filename finding severity (override by same id)
+  # - id: "filename.env-files"
+  #   type: "filename"
+  #   severity: "medium"
+  #   description: "Downgraded for this repo; we still want to catch real secrets via regex/structured rules."
+  #   tags: ["env", "filename"]
+  #   filename:
+  #     pattern_type: "regex"
+  #     pattern: "(^|/)\\.env($|\\.)|(^|/).*\\.env$|(^|/)env\\..+"
+  #   allow_paths:
+  #     - "**/.env.example"
+  #     - "**/.env.template"
+  #     - "**/.env.sample"
+  #     - "**/.env.dist"
