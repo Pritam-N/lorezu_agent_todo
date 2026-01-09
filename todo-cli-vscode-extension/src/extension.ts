@@ -120,6 +120,16 @@ class TodoStatusBar {
         }, 500);
     }
 
+    private getInstallId(): string {
+        // "Where this todo is installed" for the extension: the resolved extension root.
+        // This lets the shared config.json keep separate db_path entries per install.
+        try {
+            return fs.realpathSync(this.context.extensionPath);
+        } catch {
+            return path.resolve(this.context.extensionPath);
+        }
+    }
+
     public resolveDbPath(): string {
         // 1. Check VSCode config (workspace-folder scope first, then global)
         const folders = vscode.workspace.workspaceFolders || [];
@@ -159,22 +169,33 @@ class TodoStatusBar {
             try {
                 const configData = JSON.parse(fs.readFileSync(configFile, 'utf8'));
                 console.log(`[Todo CLI] Config file contents:`, configData);
-                if (configData.db_path) {
-                    let dbPath = configData.db_path.trim();
-                    if (dbPath) {
-                        // Match CLI behavior:
-                        // - if absolute (or ~), use as-is (after ~ expansion)
-                        // - if relative, resolve relative to config directory
-                        if (dbPath.startsWith('~')) {
-                            dbPath = this.expandPath(dbPath);
-                        } else if (!path.isAbsolute(dbPath)) {
-                            dbPath = path.resolve(configDir, dbPath);
-                        } else {
-                            dbPath = path.resolve(dbPath);
-                        }
-                        console.log(`[Todo CLI] Using config file path: ${dbPath}`);
-                        return dbPath;
+
+                // v2 (multi-install) config: installs[installId].db_path
+                const installId = this.getInstallId();
+                const installs = configData?.installs;
+                const v2DbPath =
+                    installs && typeof installs === 'object' && installs[installId] && typeof installs[installId] === 'object'
+                        ? String(installs[installId].db_path || '').trim()
+                        : '';
+
+                // v1 (legacy) config: db_path
+                const v1DbPath = configData?.db_path ? String(configData.db_path).trim() : '';
+
+                const rawDbPath = v2DbPath || v1DbPath;
+                if (rawDbPath) {
+                    let dbPath = rawDbPath;
+                    // Match CLI behavior:
+                    // - if absolute (or ~), use as-is (after ~ expansion)
+                    // - if relative, resolve relative to config directory
+                    if (dbPath.startsWith('~')) {
+                        dbPath = this.expandPath(dbPath);
+                    } else if (!path.isAbsolute(dbPath)) {
+                        dbPath = path.resolve(configDir, dbPath);
+                    } else {
+                        dbPath = path.resolve(dbPath);
                     }
+                    console.log(`[Todo CLI] Using config file path: ${dbPath}`);
+                    return dbPath;
                 }
             } catch (e) {
                 console.error(`[Todo CLI] Error reading config file:`, e);
@@ -1319,7 +1340,14 @@ class TodoStatusBar {
         if (fs.existsSync(configFile)) {
             try {
                 const configData = JSON.parse(fs.readFileSync(configFile, 'utf8'));
-                configFileContent = configData.db_path || '(not set)';
+                const installId = this.getInstallId();
+                const installs = configData?.installs;
+                const v2DbPath =
+                    installs && typeof installs === 'object' && installs[installId] && typeof installs[installId] === 'object'
+                        ? String(installs[installId].db_path || '').trim()
+                        : '';
+                const v1DbPath = configData?.db_path ? String(configData.db_path).trim() : '';
+                configFileContent = v2DbPath || v1DbPath || '(not set)';
             } catch (e) {
                 configFileContent = '(error reading)';
             }

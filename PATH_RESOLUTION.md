@@ -13,12 +13,14 @@ Resolution order:
 
 1. `--db /path/to/todos.json`
 2. `TODO_DB=/path/to/todos.json` (environment variable)
-3. Config file `db_path` (from `todo init`)
-4. Default path: `~/Documents/todo-cli/todos.json` (fallback: `~/.todo-cli/todos.json`)
+3. **Install config** (per-install): `<todo install>/todo_cli/install-config.json` → `db_path`
+4. **Global config** (per-user): config file `db_path` (from `todo init`)
+5. Default path: `~/Documents/todo-cli/todos.json` (fallback: `~/.todo-cli/todos.json`)
 
 Notes:
 
 - If the config file contains a **relative** `db_path`, it is resolved **relative to the config directory**.
+- Install-config relative `db_path` is resolved **relative to the install-config directory**.
 
 ### Extension (Cursor/VSCode)
 
